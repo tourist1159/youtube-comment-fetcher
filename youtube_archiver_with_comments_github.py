@@ -317,16 +317,15 @@ def main():
         known_ids = {a["video_id"] for a in local_archives}
         user_start_dt = datetime.fromisoformat(USER_START_DATE).astimezone(timezone.utc)
 
-        new_count = 0
+        total_new = 0
         for ch in CHANNELS:
-            if new_count >= MAX_NEW_PER_RUN:
-                break
             print(f"--- チャンネル: {ch['handle']} ---")
             stream_ids = list_stream_ids(ch["channel_id"])
             print(f"  {len(stream_ids)} 本の配信を検出")
 
+            ch_new = 0  # このチャンネルで今回取得した本数
             for video_id in stream_ids:
-                if new_count >= MAX_NEW_PER_RUN:
+                if ch_new >= MAX_NEW_PER_CHANNEL:
                     break
                 if video_id in known_ids:
                     continue
@@ -355,15 +354,16 @@ def main():
                 save_comment_stats(meta, comments)
                 # コメント有無に関わらず「処理済み」として索引に記録する。
                 # こうしないとチャット無し/アクセス不可の配信を毎回リトライし続け、
-                # MAX_NEW_PER_RUN の枠を専有して古い配信へ進めなくなる (特にメンバー限定)。
+                # 枠を専有して古い配信へ進めなくなる (特にメンバー限定)。
                 # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
                 local_archives.append(meta)
                 known_ids.add(video_id)
-                new_count += 1
+                ch_new += 1
+                total_new += 1
                 update_archive_data(local_archives)  # 各動画ごとに索引を保存 (途中終了に強く)
                 time.sleep(2)
 
-        if new_count == 0:
+        if total_new == 0:
             print("新しいアーカイブはありません。")
 
         removed = cleanup_old_comments()

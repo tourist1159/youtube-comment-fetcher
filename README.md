@@ -66,7 +66,8 @@ python youtube_archiver_with_comments_github.py
 - 収集は `YT_PUBLISH=1` で `comments_github/` に出力（= Pages 配信対象）。
 - リポジトリ直下に `cookies.txt`（メンバー資格アカウントのもの）を置くと、
   メンバー限定アーカイブも取得対象になる。`.gitignore` 済みでコミットされない。
-- 1回の実行で取得する新規本数は `MAX_NEW_PER_RUN`（既定3）に制限。追いつくまで少しずつ収集。
+- 1回の実行で取得する新規本数は **チャンネルごとに** `MAX_NEW_PER_CHANNEL`（既定3）に制限。
+  追いつくまで少しずつ収集。チャンネル単位なので、先頭チャンネルに未取得が多くても後続チャンネルが枯渇しない。
 - 30日より古いコメントは自動削除（`cleanup_old_comments`）。
 
 Windows タスクスケジューラ登録例（1時間ごと）:
