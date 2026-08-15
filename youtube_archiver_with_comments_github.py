@@ -98,6 +98,11 @@ def _ydl_opts(extra=None):
         "noprogress": True,
         "skip_download": True,
         "ignoreerrors": True,
+        # 我々は動画フォーマットを一切使わない (メタ情報 + live_chat 字幕のみ)。
+        # ログイン cookie を渡すと YouTube がフォーマットに PO トークンを要求し
+        # "Requested format is not available" でフォーマット選択が失敗するため、
+        # フォーマット不在をエラーにせず、メタ/字幕の取得を続行させる。
+        "ignore_no_formats_error": True,
     }
     if COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
