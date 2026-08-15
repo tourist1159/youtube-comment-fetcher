@@ -1,8 +1,11 @@
 # ローカル実行時の出力 (GitHub Pages では配信しない)
 comments_local/
 
-# Secrets (YT_COOKIES から実行時に生成。絶対にコミットしない)
+# Secrets (cookies。絶対にコミットしない)
 cookies.txt
+
+# ローカル実行ログ (run_and_push.ps1)
+run_local_log.txt
 
 # yt-dlp が残す一時ファイル (通常は一時ディレクトリに出るが手動実行の保険)
 *.live_chat.json

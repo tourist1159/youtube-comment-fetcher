@@ -1,9 +1,11 @@
 name: YouTube Comment Auto Fetcher
 
 on:
-  schedule:
-    # 毎時0分に実行
-    - cron: "0 * * * *"
+  # ローカル実行 (run_and_push.ps1 + タスクスケジューラ) を採用しているため、
+  # Actions の定期実行は無効。データセンターIPは YouTube に bot 判定されやすい。
+  # 手動実行 (workflow_dispatch) だけ残す。使う場合は Secret YT_COOKIES が必要。
+  # schedule:
+  #   - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -44,14 +46,24 @@ jobs:
           # yt-dlp / chat-downloader は YouTube 側変更に追随するため常に最新を入れる
           pip install --upgrade -r requirements.txt
 
+      # bot 判定対策: Secret YT_COOKIES があれば cookies.txt を生成し、
+      # 次ステップの Python に YT_COOKIES_FILE として渡す。未設定なら cookie なしで実行。
+      - name: Prepare cookies (if provided)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf '%s\n' "$YT_COOKIES" > cookies.txt
+            echo "YT_COOKIES_FILE=cookies.txt" >> "$GITHUB_ENV"
+            echo "cookies.txt を作成しました ($(wc -l < cookies.txt) 行)"
+          else
+            echo "YT_COOKIES secret 未設定 → cookie なしで実行"
+          fi
+
       - name: Run YouTube archiver
         env:
           GITHUB_ACTIONS: "true"
-          # bot 判定で失敗する場合は、cookies を Secrets(YT_COOKIES) に入れて下の2行を有効化する:
-          # YT_COOKIES_FILE: cookies.txt
-        run: |
-          # echo "${{ secrets.YT_COOKIES }}" > cookies.txt
-          python youtube_archiver_with_comments_github.py
+        run: python youtube_archiver_with_comments_github.py
 
       - name: Commit and push updates
         run: |

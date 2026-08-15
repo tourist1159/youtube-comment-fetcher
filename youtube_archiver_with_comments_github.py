@@ -50,13 +50,22 @@ ARCHIVE_FILE = "youtube_archives.json"
 os.makedirs(COMMENTS_GITHUB, exist_ok=True)
 os.makedirs(COMMENTS_LOCAL, exist_ok=True)
 
-# GitHub Actions から cookies を渡す場合のファイルパス (任意)
+# cookies の指定 (bot 判定対策)。どちらか一方を使う。
+#  - YT_COOKIES_FILE:         Netscape 形式 cookies.txt のパス (GitHub Actions 用: Secret から生成)
+#  - YT_COOKIES_FROM_BROWSER: インストール済みブラウザから直接読む (ローカル用)。
+#                             例 "firefox" / "chrome" / "edge" / "chrome:Default"
 COOKIES_FILE = os.getenv("YT_COOKIES_FILE") or None
+COOKIES_FROM_BROWSER = os.getenv("YT_COOKIES_FROM_BROWSER") or None
 
 
 def get_comment_dir():
-    """実行環境に応じて保存フォルダを決定 (Kick 版と同じ)。"""
-    if os.getenv("GITHUB_ACTIONS") == "true":
+    """出力フォルダを決定。
+
+    GitHub Actions 実行時、または公開用に YT_PUBLISH=1 を指定したローカル実行時は
+    comments_github (= GitHub Pages で配信するフォルダ) に出力する。
+    それ以外 (お試しローカル実行) は comments_local。
+    """
+    if os.getenv("GITHUB_ACTIONS") == "true" or os.getenv("YT_PUBLISH") == "1":
         return COMMENTS_GITHUB
     return COMMENTS_LOCAL
 
@@ -92,6 +101,10 @@ def _ydl_opts(extra=None):
     }
     if COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
+    if COOKIES_FROM_BROWSER:
+        # "browser" または "browser:profile" 形式を受け付ける
+        name, _, profile = COOKIES_FROM_BROWSER.partition(":")
+        opts["cookiesfrombrowser"] = (name.strip(), profile.strip() or None, None, None)
     if extra:
         opts.update(extra)
     return opts
@@ -321,8 +334,10 @@ def main():
                 if start_dt < user_start_dt:
                     print(f"  基準日時より古いため打ち切り: {video_id} ({meta['start_time']})")
                     break
-                if meta.get("live_status") not in ("was_live", "post_live"):
-                    print(f"  ライブアーカイブでないためスキップ: {video_id} ({meta.get('live_status')})")
+                # /streams タブは過去ライブのみ。まだ配信中/配信予定のものだけ除外し、
+                # メンバー限定を含む全アーカイブを対象にする (メンバー限定は member 資格の cookie が必要)。
+                if meta.get("live_status") in ("is_live", "is_upcoming"):
+                    print(f"  まだ配信中/予定のためスキップ: {video_id} ({meta.get('live_status')})")
                     continue
 
                 print(f"  新規: {meta['title']} ({video_id})")
@@ -330,11 +345,16 @@ def main():
                 meta["number_of_comments"] = len(comments)
                 meta.pop("live_status", None)
 
-                if save_comment_stats(meta, comments):
-                    local_archives.append(meta)
-                    known_ids.add(video_id)
-                    new_count += 1
-                    update_archive_data(local_archives)  # 各動画ごとに索引を保存 (途中終了に強く)
+                # コメントがあれば JSON を出力 (無ければファイルは作らない)。
+                save_comment_stats(meta, comments)
+                # コメント有無に関わらず「処理済み」として索引に記録する。
+                # こうしないとチャット無し/アクセス不可の配信を毎回リトライし続け、
+                # MAX_NEW_PER_RUN の枠を専有して古い配信へ進めなくなる (特にメンバー限定)。
+                # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
+                local_archives.append(meta)
+                known_ids.add(video_id)
+                new_count += 1
+                update_archive_data(local_archives)  # 各動画ごとに索引を保存 (途中終了に強く)
                 time.sleep(2)
 
         if new_count == 0:
