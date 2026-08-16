@@ -35,17 +35,21 @@ YouTube 対応版。
 
 生成物:
 - `youtube_archives.json` … 収集済みコンテンツの索引（配信＋通常動画）。時系列サイトの主データ。
-  各エントリ:
+  **`start_time` の新しい順（降順）にソート**して書き出す。各エントリ:
   ```json
   // 配信
   { "video_id":"RSGOhFhym8k", "title":"...", "start_time":"2026-08-14T07:10:20+00:00",
     "url":"https://www.youtube.com/watch?v=RSGOhFhym8k", "duration":33509,
-    "video_length":"09:18:29", "type":"stream", "number_of_comments":21935 }
+    "video_length":"09:18:29", "type":"stream", "channel":"mokouliszt",
+    "number_of_comments":21935 }
   // 通常動画 (コメントなし)
   { "video_id":"WoC3TpJORaY", "title":"...", "start_time":"2026-08-04T...",
-    "url":"...", "duration":451, "video_length":"00:07:31", "type":"video" }
+    "url":"...", "duration":451, "video_length":"00:07:31", "type":"video",
+    "channel":"mokouliszt" }
   ```
+  `type` は `"stream"` / `"video"`、`channel` は `CHANNELS` の handle（例 `mokouliszt` / `mokoustream`）。
   拡張は `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
+  ※ `type`/`channel` 未設定の旧エントリは、次回実行時に列挙結果から自動補完される。
 - `comments_github/<videoId>_comments.json` … 配信1本ごとのコメント（通常動画には作られない）
   ```json
   {

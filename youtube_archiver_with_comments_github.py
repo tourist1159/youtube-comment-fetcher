@@ -278,7 +278,17 @@ def save_comment_stats(video, comments):
         return False
 
 
+def _start_key(a):
+    """start_time でソートするためのキー (パース失敗時は最古扱い)。"""
+    try:
+        return datetime.fromisoformat(a.get("start_time"))
+    except Exception:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def update_archive_data(archives):
+    # 時系列サイト用に新しい順 (start_time 降順) で書き出す。
+    archives.sort(key=_start_key, reverse=True)
     with open(ARCHIVE_FILE, "w", encoding="utf-8") as f:
         json.dump(archives, f, ensure_ascii=False, indent=2)
     print(f"📁 {ARCHIVE_FILE} 更新完了 ({len(archives)}件)")
@@ -313,14 +323,12 @@ def cleanup_old_comments():
 
 
 # === 1タブ分の収集 ===
-def process_tab(ch, tab, collect_chat, cap, known_ids, local_archives, user_start_dt):
-    """指定タブ (streams/videos) を新しい順に走査し、新規を最大 cap 件まで収集する。
+def process_tab(ch, tab, ids, collect_chat, cap, known_ids, local_archives, user_start_dt):
+    """指定タブ (streams/videos) の videoId リストを新しい順に走査し、新規を最大 cap 件まで収集する。
 
     collect_chat=True の配信のみチャットを取得・保存する。通常動画はメタ情報のみ。
     戻り値: 今回このタブで取得した件数。
     """
-    ids = list_tab_ids(ch["channel_id"], tab)
-    print(f"  [{tab}] {len(ids)} 件を検出")
     n = 0
     for video_id in ids:
         if n >= cap:
@@ -344,6 +352,7 @@ def process_tab(ch, tab, collect_chat, cap, known_ids, local_archives, user_star
 
         is_stream = meta.get("live_status") in ("was_live", "post_live")
         meta["type"] = "stream" if is_stream else "video"
+        meta["channel"] = ch["handle"]  # どのチャンネルのものか
         meta.pop("live_status", None)
 
         # 配信のみコメント取得 (通常動画はコメント不要)。
@@ -352,7 +361,7 @@ def process_tab(ch, tab, collect_chat, cap, known_ids, local_archives, user_star
             meta["number_of_comments"] = len(comments)
             save_comment_stats(meta, comments)
 
-        print(f"  新規[{meta['type']}]: {meta['title']} ({video_id})")
+        print(f"  新規[{meta['type']}/{ch['handle']}]: {meta['title']} ({video_id})")
         # コメント有無に関わらず「処理済み」として索引に記録する。
         # こうしないとチャット無し/アクセス不可のものを毎回リトライし続け、枠を専有してしまう。
         # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
@@ -364,6 +373,24 @@ def process_tab(ch, tab, collect_chat, cap, known_ids, local_archives, user_star
     return n
 
 
+def backfill_channel_type(local_archives, id_meta):
+    """channel / type が無い既存(レガシー)エントリを、今回の列挙結果から補完する。"""
+    changed = 0
+    for a in local_archives:
+        info = id_meta.get(a["video_id"])
+        if not info:
+            continue
+        handle, ttype = info
+        if not a.get("channel"):
+            a["channel"] = handle
+            changed += 1
+        if not a.get("type"):
+            a["type"] = ttype
+            changed += 1
+    if changed:
+        print(f"🔧 レガシーエントリを補完: {changed} フィールド")
+
+
 # === メイン ===
 def main():
     try:
@@ -373,16 +400,29 @@ def main():
         user_start_dt = datetime.fromisoformat(USER_START_DATE).astimezone(timezone.utc)
 
         total_new = 0
+        id_meta = {}  # video_id -> (channel_handle, type)  ※レガシー補完にも使う
         for ch in CHANNELS:
             print(f"--- チャンネル: {ch['handle']} ---")
+            stream_ids = list_tab_ids(ch["channel_id"], "streams")
+            video_ids = list_tab_ids(ch["channel_id"], "videos")
+            print(f"  streams {len(stream_ids)} 件 / videos {len(video_ids)} 件を検出")
+            for vid in stream_ids:
+                id_meta.setdefault(vid, (ch["handle"], "stream"))
+            for vid in video_ids:
+                id_meta.setdefault(vid, (ch["handle"], "video"))
+
             # 配信 (コメント付き)
             total_new += process_tab(
-                ch, "streams", collect_chat=True, cap=MAX_NEW_STREAMS_PER_CHANNEL,
+                ch, "streams", stream_ids, collect_chat=True, cap=MAX_NEW_STREAMS_PER_CHANNEL,
                 known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
             # 通常動画 (メタ情報のみ)
             total_new += process_tab(
-                ch, "videos", collect_chat=False, cap=MAX_NEW_VIDEOS_PER_CHANNEL,
+                ch, "videos", video_ids, collect_chat=False, cap=MAX_NEW_VIDEOS_PER_CHANNEL,
                 known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
+
+        # 既存(type/channel 未設定)エントリを補完し、ソートして書き出す
+        backfill_channel_type(local_archives, id_meta)
+        update_archive_data(local_archives)
 
         if total_new == 0:
             print("新しいアーカイブ/動画はありません。")

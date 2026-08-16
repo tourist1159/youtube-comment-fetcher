@@ -1,102 +1,13 @@
 [
   {
-    "video_id": "RSGOhFhym8k",
-    "title": "ついに今日決着。CRシャドバカップ　優勝したら1800万。もこう、たいじ、柊ツルギ",
-    "start_time": "2026-08-14T07:10:20+00:00",
-    "url": "https://www.youtube.com/watch?v=RSGOhFhym8k",
-    "duration": 33509,
-    "video_length": "09:18:29",
-    "number_of_comments": 21935
-  },
-  {
-    "video_id": "_To4enId4SY",
-    "title": "あ",
-    "start_time": "2026-08-10T00:12:16+00:00",
-    "url": "https://www.youtube.com/watch?v=_To4enId4SY",
-    "duration": 10781,
-    "video_length": "02:59:41",
-    "number_of_comments": 11321
-  },
-  {
-    "video_id": "L9R_mWsvCHk",
-    "title": "ムラゲ応援　シャドバプレミアシリーズ",
-    "start_time": "2026-08-01T08:05:33+00:00",
-    "url": "https://www.youtube.com/watch?v=L9R_mWsvCHk",
-    "duration": 6356,
-    "video_length": "01:45:56",
-    "number_of_comments": 9038
-  },
-  {
-    "video_id": "XLrA_GxmBAg",
-    "title": "シャドバ",
-    "start_time": "2026-08-14T04:36:30+00:00",
-    "url": "https://www.youtube.com/watch?v=XLrA_GxmBAg",
-    "duration": 9031,
-    "video_length": "02:30:31",
-    "number_of_comments": 18593
-  },
-  {
-    "video_id": "lnLoAbjfH_g",
-    "title": "おしえてもらう",
-    "start_time": "2026-08-13T13:54:59+00:00",
-    "url": "https://www.youtube.com/watch?v=lnLoAbjfH_g",
-    "duration": 7836,
-    "video_length": "02:10:36",
-    "number_of_comments": 3395
-  },
-  {
-    "video_id": "W16smr_hsEo",
-    "title": "お",
-    "start_time": "2026-08-12T06:13:42+00:00",
-    "url": "https://www.youtube.com/watch?v=W16smr_hsEo",
-    "duration": 11502,
-    "video_length": "03:11:42",
-    "number_of_comments": 21932
-  },
-  {
-    "video_id": "ZW2bfBSjZLQ",
-    "title": "ムラゲ応援　シャドバプレミアシリーズ",
-    "start_time": "2026-08-01T08:03:12+00:00",
-    "url": "https://www.youtube.com/watch?v=ZW2bfBSjZLQ",
-    "duration": 96,
-    "video_length": "00:01:36",
-    "number_of_comments": 0
-  },
-  {
-    "video_id": "whwMyyx2MBM",
-    "title": "【最終日】全員ぶっ〇す。第三回ニコニコ老人会RUST もこう視点",
-    "start_time": "2026-08-09T08:03:41+00:00",
-    "url": "https://www.youtube.com/watch?v=whwMyyx2MBM",
-    "duration": 25918,
-    "video_length": "07:11:58",
-    "number_of_comments": 106099
-  },
-  {
-    "video_id": "zWa-akzgWx0",
-    "title": "全員ぶっ〇す。ニコニコ老人会RUST もこう視点 第三回",
-    "start_time": "2026-08-07T08:58:53+00:00",
-    "url": "https://www.youtube.com/watch?v=zWa-akzgWx0",
-    "duration": 36538,
-    "video_length": "10:08:58",
-    "number_of_comments": 116786
-  },
-  {
-    "video_id": "WoC3TpJORaY",
-    "title": "何も知らない奴が\"ちいかわ映画\"を見たガチ感想",
-    "start_time": "2026-08-04T08:30:24+00:00",
-    "url": "https://www.youtube.com/watch?v=WoC3TpJORaY",
-    "duration": 451,
-    "video_length": "00:07:31",
-    "type": "video"
-  },
-  {
     "video_id": "4sQgcCYA7Ds",
     "title": "完全初見で青鬼新作を驚愕の\"一倍速\"プレイした結果ｗｗｗｗｗ【青鬼2】実況プレイ",
     "start_time": "2026-08-15T13:00:16+00:00",
     "url": "https://www.youtube.com/watch?v=4sQgcCYA7Ds",
     "duration": 7624,
     "video_length": "02:07:04",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "qSRAl5t2RVw",
@@ -105,7 +16,41 @@
     "url": "https://www.youtube.com/watch?v=qSRAl5t2RVw",
     "duration": 7195,
     "video_length": "01:59:55",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "RSGOhFhym8k",
+    "title": "ついに今日決着。CRシャドバカップ　優勝したら1800万。もこう、たいじ、柊ツルギ",
+    "start_time": "2026-08-14T07:10:20+00:00",
+    "url": "https://www.youtube.com/watch?v=RSGOhFhym8k",
+    "duration": 33509,
+    "video_length": "09:18:29",
+    "number_of_comments": 21935,
+    "channel": "mokouliszt",
+    "type": "stream"
+  },
+  {
+    "video_id": "XLrA_GxmBAg",
+    "title": "シャドバ",
+    "start_time": "2026-08-14T04:36:30+00:00",
+    "url": "https://www.youtube.com/watch?v=XLrA_GxmBAg",
+    "duration": 9031,
+    "video_length": "02:30:31",
+    "number_of_comments": 18593,
+    "channel": "mokouliszt",
+    "type": "stream"
+  },
+  {
+    "video_id": "lnLoAbjfH_g",
+    "title": "おしえてもらう",
+    "start_time": "2026-08-13T13:54:59+00:00",
+    "url": "https://www.youtube.com/watch?v=lnLoAbjfH_g",
+    "duration": 7836,
+    "video_length": "02:10:36",
+    "number_of_comments": 3395,
+    "channel": "mokouliszt",
+    "type": "stream"
   },
   {
     "video_id": "-k6Jaklhl9E",
@@ -114,7 +59,19 @@
     "url": "https://www.youtube.com/watch?v=-k6Jaklhl9E",
     "duration": 3757,
     "video_length": "01:02:37",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "W16smr_hsEo",
+    "title": "お",
+    "start_time": "2026-08-12T06:13:42+00:00",
+    "url": "https://www.youtube.com/watch?v=W16smr_hsEo",
+    "duration": 11502,
+    "video_length": "03:11:42",
+    "number_of_comments": 21932,
+    "channel": "mokouliszt",
+    "type": "stream"
   },
   {
     "video_id": "DN5ymLbrpPk",
@@ -123,7 +80,8 @@
     "url": "https://www.youtube.com/watch?v=DN5ymLbrpPk",
     "duration": 4780,
     "video_length": "01:19:40",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "DpxK0ezNZUY",
@@ -132,7 +90,8 @@
     "url": "https://www.youtube.com/watch?v=DpxK0ezNZUY",
     "duration": 3122,
     "video_length": "00:52:02",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "udYPQEeus6c",
@@ -141,7 +100,30 @@
     "url": "https://www.youtube.com/watch?v=udYPQEeus6c",
     "duration": 31,
     "video_length": "00:00:31",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "_To4enId4SY",
+    "title": "あ",
+    "start_time": "2026-08-10T00:12:16+00:00",
+    "url": "https://www.youtube.com/watch?v=_To4enId4SY",
+    "duration": 10781,
+    "video_length": "02:59:41",
+    "number_of_comments": 11321,
+    "channel": "mokouliszt",
+    "type": "stream"
+  },
+  {
+    "video_id": "whwMyyx2MBM",
+    "title": "【最終日】全員ぶっ〇す。第三回ニコニコ老人会RUST もこう視点",
+    "start_time": "2026-08-09T08:03:41+00:00",
+    "url": "https://www.youtube.com/watch?v=whwMyyx2MBM",
+    "duration": 25918,
+    "video_length": "07:11:58",
+    "number_of_comments": 106099,
+    "channel": "mokoustream",
+    "type": "stream"
   },
   {
     "video_id": "EVwDJ1cJe0c",
@@ -150,7 +132,19 @@
     "url": "https://www.youtube.com/watch?v=EVwDJ1cJe0c",
     "duration": 4783,
     "video_length": "01:19:43",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "zWa-akzgWx0",
+    "title": "全員ぶっ〇す。ニコニコ老人会RUST もこう視点 第三回",
+    "start_time": "2026-08-07T08:58:53+00:00",
+    "url": "https://www.youtube.com/watch?v=zWa-akzgWx0",
+    "duration": 36538,
+    "video_length": "10:08:58",
+    "number_of_comments": 116786,
+    "channel": "mokoustream",
+    "type": "stream"
   },
   {
     "video_id": "zviMeuy9S-c",
@@ -159,7 +153,8 @@
     "url": "https://www.youtube.com/watch?v=zviMeuy9S-c",
     "duration": 2649,
     "video_length": "00:44:09",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "sMGS2mc3hCw",
@@ -168,7 +163,8 @@
     "url": "https://www.youtube.com/watch?v=sMGS2mc3hCw",
     "duration": 7893,
     "video_length": "02:11:33",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "esVPf_pbU8E",
@@ -177,7 +173,18 @@
     "url": "https://www.youtube.com/watch?v=esVPf_pbU8E",
     "duration": 3220,
     "video_length": "00:53:40",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "WoC3TpJORaY",
+    "title": "何も知らない奴が\"ちいかわ映画\"を見たガチ感想",
+    "start_time": "2026-08-04T08:30:24+00:00",
+    "url": "https://www.youtube.com/watch?v=WoC3TpJORaY",
+    "duration": 451,
+    "video_length": "00:07:31",
+    "type": "video",
+    "channel": "mokouliszt"
   },
   {
     "video_id": "rXy0v2E83Ho",
@@ -186,7 +193,8 @@
     "url": "https://www.youtube.com/watch?v=rXy0v2E83Ho",
     "duration": 4708,
     "video_length": "01:18:28",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "JIS9Xkny3n8",
@@ -195,7 +203,8 @@
     "url": "https://www.youtube.com/watch?v=JIS9Xkny3n8",
     "duration": 3307,
     "video_length": "00:55:07",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
   },
   {
     "video_id": "wlp5axBtkhc",
@@ -204,6 +213,29 @@
     "url": "https://www.youtube.com/watch?v=wlp5axBtkhc",
     "duration": 5979,
     "video_length": "01:39:39",
-    "type": "video"
+    "type": "video",
+    "channel": "mokoustream"
+  },
+  {
+    "video_id": "L9R_mWsvCHk",
+    "title": "ムラゲ応援　シャドバプレミアシリーズ",
+    "start_time": "2026-08-01T08:05:33+00:00",
+    "url": "https://www.youtube.com/watch?v=L9R_mWsvCHk",
+    "duration": 6356,
+    "video_length": "01:45:56",
+    "number_of_comments": 9038,
+    "channel": "mokouliszt",
+    "type": "stream"
+  },
+  {
+    "video_id": "ZW2bfBSjZLQ",
+    "title": "ムラゲ応援　シャドバプレミアシリーズ",
+    "start_time": "2026-08-01T08:03:12+00:00",
+    "url": "https://www.youtube.com/watch?v=ZW2bfBSjZLQ",
+    "duration": 96,
+    "video_length": "00:01:36",
+    "number_of_comments": 0,
+    "channel": "mokouliszt",
+    "type": "stream"
   }
 ]
