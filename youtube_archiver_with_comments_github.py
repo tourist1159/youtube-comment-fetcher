@@ -36,11 +36,13 @@ CHANNELS = [
 ]
 
 # === 動作パラメータ ===
-# 1回の実行で「チャンネルごとに」新規取得する最大本数 (長時間配信の取得負荷対策)。
-# チャンネル単位にすることで、先頭チャンネルに未取得が多くても後続チャンネルが枯渇しない。
-MAX_NEW_PER_CHANNEL = 3
-# /streams タブから拾う最大件数 (新しい順)
-STREAMS_SCAN_LIMIT = 80
+# 1回の実行で「チャンネルごとに」新規取得する最大本数。チャンネル単位にすることで、
+# 先頭チャンネルに未取得が多くても後続チャンネルが枯渇しない。
+# 配信はチャットDLが重いので少なめ、通常動画はメタのみで速いので多め。
+MAX_NEW_STREAMS_PER_CHANNEL = 3
+MAX_NEW_VIDEOS_PER_CHANNEL = 30
+# 各タブ (streams / videos) から拾う最大件数 (新しい順)
+SCAN_LIMIT = 80
 # コメント1件あたりのテキスト最大長 (肥大化防止)
 MAX_TEXT_LEN = 200
 
@@ -116,12 +118,13 @@ def _ydl_opts(extra=None):
     return opts
 
 
-def list_stream_ids(channel_id):
-    """チャンネルの /streams タブ (過去ライブ) を flat で列挙し、videoId のリストを返す。新しい順。"""
-    url = f"https://www.youtube.com/channel/{channel_id}/streams"
+def list_tab_ids(channel_id, tab):
+    """チャンネルの指定タブ (tab="streams": 過去ライブ / "videos": 通常動画) を
+    flat で列挙し、videoId のリストを返す。新しい順。"""
+    url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
     opts = _ydl_opts({
         "extract_flat": "in_playlist",
-        "playlistend": STREAMS_SCAN_LIMIT,
+        "playlistend": SCAN_LIMIT,
     })
     ids = []
     try:
@@ -135,7 +138,7 @@ def list_stream_ids(channel_id):
             if vid:
                 ids.append(vid)
     except Exception as e:
-        print(f"[{channel_id}] streams 列挙エラー: {e}")
+        print(f"[{channel_id}/{tab}] 列挙エラー: {e}")
     return ids
 
 
@@ -309,10 +312,62 @@ def cleanup_old_comments():
     return removed_ids
 
 
+# === 1タブ分の収集 ===
+def process_tab(ch, tab, collect_chat, cap, known_ids, local_archives, user_start_dt):
+    """指定タブ (streams/videos) を新しい順に走査し、新規を最大 cap 件まで収集する。
+
+    collect_chat=True の配信のみチャットを取得・保存する。通常動画はメタ情報のみ。
+    戻り値: 今回このタブで取得した件数。
+    """
+    ids = list_tab_ids(ch["channel_id"], tab)
+    print(f"  [{tab}] {len(ids)} 件を検出")
+    n = 0
+    for video_id in ids:
+        if n >= cap:
+            break
+        if video_id in known_ids:
+            continue
+
+        meta = fetch_video_meta(video_id)
+        if not meta or not meta["start_time"]:
+            continue
+
+        start_dt = datetime.fromisoformat(meta["start_time"])
+        # 新しい順なので、基準日時より古い動画に到達したら以降は全て古い → 打ち切り。
+        if start_dt < user_start_dt:
+            print(f"    基準日時より古いため打ち切り: {video_id} ({meta['start_time']})")
+            break
+        # まだ配信中/配信予定のものは除外 (アーカイブ化後に取得する)。
+        if meta.get("live_status") in ("is_live", "is_upcoming"):
+            print(f"    まだ配信中/予定のためスキップ: {video_id}")
+            continue
+
+        is_stream = meta.get("live_status") in ("was_live", "post_live")
+        meta["type"] = "stream" if is_stream else "video"
+        meta.pop("live_status", None)
+
+        # 配信のみコメント取得 (通常動画はコメント不要)。
+        if collect_chat and is_stream:
+            comments = get_chat_comments(video_id)
+            meta["number_of_comments"] = len(comments)
+            save_comment_stats(meta, comments)
+
+        print(f"  新規[{meta['type']}]: {meta['title']} ({video_id})")
+        # コメント有無に関わらず「処理済み」として索引に記録する。
+        # こうしないとチャット無し/アクセス不可のものを毎回リトライし続け、枠を専有してしまう。
+        # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
+        local_archives.append(meta)
+        known_ids.add(video_id)
+        n += 1
+        update_archive_data(local_archives)  # 各件ごとに索引保存 (途中終了に強く)
+        time.sleep(1)
+    return n
+
+
 # === メイン ===
 def main():
     try:
-        print("YouTube アーカイブ収集を開始...")
+        print("YouTube 収集を開始...")
         local_archives = load_local_archives()
         known_ids = {a["video_id"] for a in local_archives}
         user_start_dt = datetime.fromisoformat(USER_START_DATE).astimezone(timezone.utc)
@@ -320,56 +375,22 @@ def main():
         total_new = 0
         for ch in CHANNELS:
             print(f"--- チャンネル: {ch['handle']} ---")
-            stream_ids = list_stream_ids(ch["channel_id"])
-            print(f"  {len(stream_ids)} 本の配信を検出")
-
-            ch_new = 0  # このチャンネルで今回取得した本数
-            for video_id in stream_ids:
-                if ch_new >= MAX_NEW_PER_CHANNEL:
-                    break
-                if video_id in known_ids:
-                    continue
-
-                meta = fetch_video_meta(video_id)
-                if not meta or not meta["start_time"]:
-                    continue
-
-                start_dt = datetime.fromisoformat(meta["start_time"])
-                # /streams は新しい順。基準日時より古い動画に到達したら、それ以降は全て古いので打ち切り。
-                if start_dt < user_start_dt:
-                    print(f"  基準日時より古いため打ち切り: {video_id} ({meta['start_time']})")
-                    break
-                # /streams タブは過去ライブのみ。まだ配信中/配信予定のものだけ除外し、
-                # メンバー限定を含む全アーカイブを対象にする (メンバー限定は member 資格の cookie が必要)。
-                if meta.get("live_status") in ("is_live", "is_upcoming"):
-                    print(f"  まだ配信中/予定のためスキップ: {video_id} ({meta.get('live_status')})")
-                    continue
-
-                print(f"  新規: {meta['title']} ({video_id})")
-                comments = get_chat_comments(video_id)
-                meta["number_of_comments"] = len(comments)
-                meta.pop("live_status", None)
-
-                # コメントがあれば JSON を出力 (無ければファイルは作らない)。
-                save_comment_stats(meta, comments)
-                # コメント有無に関わらず「処理済み」として索引に記録する。
-                # こうしないとチャット無し/アクセス不可の配信を毎回リトライし続け、
-                # 枠を専有して古い配信へ進めなくなる (特にメンバー限定)。
-                # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
-                local_archives.append(meta)
-                known_ids.add(video_id)
-                ch_new += 1
-                total_new += 1
-                update_archive_data(local_archives)  # 各動画ごとに索引を保存 (途中終了に強く)
-                time.sleep(2)
+            # 配信 (コメント付き)
+            total_new += process_tab(
+                ch, "streams", collect_chat=True, cap=MAX_NEW_STREAMS_PER_CHANNEL,
+                known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
+            # 通常動画 (メタ情報のみ)
+            total_new += process_tab(
+                ch, "videos", collect_chat=False, cap=MAX_NEW_VIDEOS_PER_CHANNEL,
+                known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
 
         if total_new == 0:
-            print("新しいアーカイブはありません。")
+            print("新しいアーカイブ/動画はありません。")
 
-        removed = cleanup_old_comments()
-        if removed:
-            local_archives = [a for a in local_archives if a["video_id"] not in removed]
-            update_archive_data(local_archives)
+        # 30日より古い「コメントファイル」は削除して容量を抑える。
+        # ただし索引エントリ (メタ情報) は時系列サイト用に残す。
+        # → 古い配信はグラフが出なくなるだけで、タイムライン上には残り続ける。
+        cleanup_old_comments()
 
         print("✨ 完了")
 

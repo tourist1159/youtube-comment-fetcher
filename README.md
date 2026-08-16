@@ -18,23 +18,35 @@ YouTube 対応版。
 
 ## 仕組み
 
-1. 各チャンネルの `/streams`（過去ライブ）を **yt-dlp** で新しい順に列挙。
-2. 既知でない動画のメタ（配信開始・長さ・live_status）を yt-dlp で取得。
-   `USER_START_DATE` より古い動画に到達したら打ち切り。配信中/配信予定のみ除外し、
-   **メンバー限定アーカイブも対象に含める**（メンバー資格のある cookie を渡した場合のみ実際に取得可能。
-   cookie が無ければアクセスできず自動スキップされる）。
-3. ライブアーカイブのチャットリプレイを **yt-dlp の live_chat 字幕**で取得し、
-   `replayChatItemAction` をパースして `{id, offset, text}` に整形。
-   （chat-downloader は現行 YouTube をパースできないため不採用）
-4. 結果を保存し、索引 `youtube_archives.json` を更新。チャットが取得できなかった配信も
-   索引には記録し（コメントファイルは作らない）、毎回の再取得を防ぐ。
+各チャンネルにつき **2つのタブ**を収集する（時系列サイト向けに配信も通常動画も網羅）:
+
+- **`/streams`（過去ライブ）→ `type:"stream"`**: メタ情報＋チャットリプレイを取得。
+  チャットは **yt-dlp の live_chat 字幕**で取得し `replayChatItemAction` をパースして
+  `{id, offset, text}` に整形（chat-downloader は現行 YouTube を解析できないため不採用）。
+  メンバー限定も対象（メンバー資格のある cookie を渡した場合のみ実取得。無ければ自動スキップ）。
+- **`/videos`（通常動画）→ `type:"video"`**: **メタ情報のみ**（コメントは取得しない）。
+
+共通処理: 新しい順に列挙し、`USER_START_DATE` より古いものに到達したら打ち切り。
+配信中/配信予定は除外。取得したものは索引 `youtube_archives.json` に記録（チャット取得不可の
+配信も記録して毎回の再取得を防ぐ）。取得負荷の重い配信は少なめ・通常動画は多めの上限を設定。
 
 > ⚠️ メンバー限定配信のコメント（本文・投稿者ID）も、収集すれば公開の GitHub Pages で
 > 誰でも閲覧可能になります。承知の上で運用してください。
 
 生成物:
-- `youtube_archives.json` … 収集済み動画の索引（拡張が videoId の存在確認に使う）
-- `comments_github/<videoId>_comments.json` … 1配信ごとのコメント
+- `youtube_archives.json` … 収集済みコンテンツの索引（配信＋通常動画）。時系列サイトの主データ。
+  各エントリ:
+  ```json
+  // 配信
+  { "video_id":"RSGOhFhym8k", "title":"...", "start_time":"2026-08-14T07:10:20+00:00",
+    "url":"https://www.youtube.com/watch?v=RSGOhFhym8k", "duration":33509,
+    "video_length":"09:18:29", "type":"stream", "number_of_comments":21935 }
+  // 通常動画 (コメントなし)
+  { "video_id":"WoC3TpJORaY", "title":"...", "start_time":"2026-08-04T...",
+    "url":"...", "duration":451, "video_length":"00:07:31", "type":"video" }
+  ```
+  拡張は `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
+- `comments_github/<videoId>_comments.json` … 配信1本ごとのコメント（通常動画には作られない）
   ```json
   {
     "video_id": "RSGOhFhym8k",
@@ -45,6 +57,7 @@ YouTube 対応版。
   }
   ```
   `offset` は配信開始からの経過秒。フロントは `Math.floor(offset/60)` で1分バケットに集計する。
+  古いコメントファイルは30日で削除されるが、索引エントリ（メタ情報）は時系列サイト用に残す。
 
 ## 運用: ローカル実行 + push（推奨・採用中）
 
