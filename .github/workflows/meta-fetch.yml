@@ -37,13 +37,11 @@ jobs:
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
         run: python youtube_meta_fetcher.py
 
-      - name: Pull latest before commit
-        run: git pull --rebase
-
       - name: Commit and push updates
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Update YouTube archive metadata [skip ci]" || echo "No changes"
+          git pull --rebase
           git push

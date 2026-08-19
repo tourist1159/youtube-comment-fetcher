@@ -45,11 +45,18 @@ python youtube_archiver_with_comments_github.py
 Log "収集スクリプト終了 (exit=$LASTEXITCODE)"
 
 # 変更を commit & push (cookies.txt / comments_local / ログは .gitignore 済みで対象外)
+# チャット取得中(数分〜数十分)に Actions が並行して push している可能性があるため、
+# commit 後・push 前に改めて pull --rebase する。
 git add -A
 git commit -m "Update archives and comments (local)"
 if ($LASTEXITCODE -eq 0) {
-    git push
-    if ($LASTEXITCODE -eq 0) { Log "push 成功" } else { Log "push 失敗 (要確認)" }
+    git pull --rebase
+    if ($LASTEXITCODE -ne 0) {
+        Log "commit後の git pull --rebase 失敗 (要確認、push はスキップ)"
+    } else {
+        git push
+        if ($LASTEXITCODE -eq 0) { Log "push 成功" } else { Log "push 失敗 (要確認)" }
+    }
 } else {
     Log "変更なし → commit/push スキップ"
 }
