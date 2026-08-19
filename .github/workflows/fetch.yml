@@ -1,11 +1,12 @@
-name: YouTube Comment Auto Fetcher
+name: YouTube Comment Auto Fetcher (manual fallback)
 
+# メタ情報収集は meta-fetch.yml (YouTube Data API v3) が Actions 上で定期実行する。
+# youtube_archiver_with_comments_github.py はチャット取得専用 (yt-dlp)。
+# cookie 必須の処理のため run_and_push.ps1 でローカル定期実行するのが基本だが、
+# このワークフローで Actions 上からも手動実行できる (ローカルPCが使えない時用)。
+# データセンターIPは YouTube に bot 判定されやすいため、使う場合は
+# Secret YT_COOKIES の設定を推奨。
 on:
-  # ローカル実行 (run_and_push.ps1 + タスクスケジューラ) を採用しているため、
-  # Actions の定期実行は無効。データセンターIPは YouTube に bot 判定されやすい。
-  # 手動実行 (workflow_dispatch) だけ残す。使う場合は Secret YT_COOKIES が必要。
-  # schedule:
-  #   - cron: "0 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -72,4 +73,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Update archives and comments [skip ci]" || echo "No changes"
+          git pull --rebase
           git push

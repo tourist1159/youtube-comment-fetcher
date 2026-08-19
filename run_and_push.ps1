@@ -15,6 +15,15 @@ function Log($msg) {
 
 Log "=== ローカル収集開始 ==="
 
+# GitHub Actions (meta-fetch.yml) が並行して新規エントリを push してくるため、
+# 作業開始前に必ず最新の youtube_archives.json を取得する。
+git pull --rebase
+if ($LASTEXITCODE -ne 0) {
+    Log "git pull --rebase 失敗 → 中断 (手動で確認してください)"
+    exit 1
+}
+Log "git pull 完了 (exit=$LASTEXITCODE)"
+
 # 公開用フォルダ (comments_github) に出力させる
 $env:YT_PUBLISH = "1"
 

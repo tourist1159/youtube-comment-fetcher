@@ -1,8 +1,9 @@
 # youtube-comment-fetcher
 
-YouTube のライブ配信アーカイブからチャットリプレイを収集し、コメント流量グラフ用の
-JSON を生成・配信するバックエンド。ブラウザ拡張 `sortcomments`（YT コメントソーター）が
-この JSON を読み込み、視聴ページにグラフを埋め込む。
+YouTube のライブ配信アーカイブ/通常動画のメタ情報とチャットリプレイを収集し、
+コメント流量グラフ・時系列サイト用の JSON を生成・配信するバックエンド。
+ブラウザ拡張 `sortcomments`（YT コメントソーター）とまとめサイト `mokou-timeline` が
+この JSON を読み込む。
 
 Kick 版 [`kick-comment-fetcher`](https://github.com/tourist1159/kick-comment-fetcher) の
 YouTube 対応版。
@@ -14,21 +15,39 @@ YouTube 対応版。
 | [@mokouliszt](https://www.youtube.com/@mokouliszt) | `UCZFxcWJS1_iVIFETARRRHZQ` |
 | [@mokoustream](https://www.youtube.com/@mokoustream) | `UCENoC6MLc4pL-vehJyzSWmg` |
 
-`youtube_archiver_with_comments_github.py` の `CHANNELS` を編集すれば増減できる。
+`youtube_meta_fetcher.py` と `youtube_archiver_with_comments_github.py` 両方の
+`CHANNELS`（前者は後者と別ファイル）を編集すれば増減できる。
 
-## 仕組み
+## 仕組み（2系統に分離）
 
-各チャンネルにつき **2つのタブ**を収集する（時系列サイト向けに配信も通常動画も網羅）:
+メタ情報収集とチャット取得は、bot判定リスクの違いから**別スクリプト・別実行環境**に分けている。
 
-- **`/streams`（過去ライブ）→ `type:"stream"`**: メタ情報＋チャットリプレイを取得。
-  チャットは **yt-dlp の live_chat 字幕**で取得し `replayChatItemAction` をパースして
-  `{id, offset, text}` に整形（chat-downloader は現行 YouTube を解析できないため不採用）。
-  メンバー限定も対象（メンバー資格のある cookie を渡した場合のみ実取得。無ければ自動スキップ）。
-- **`/videos`（通常動画）→ `type:"video"`**: **メタ情報のみ**（コメントは取得しない）。
+### ① メタ情報収集（クラウド・GitHub Actions）— `youtube_meta_fetcher.py`
+YouTube **Data API v3**（公式API）を使い、タイトル・開始時刻・長さ・配信/通常動画の判別を取得する。
+yt-dlp を使わないため GitHub Actions のデータセンターIPでも bot 判定を受けない。
 
-共通処理: 新しい順に列挙し、`USER_START_DATE` より古いものに到達したら打ち切り。
-配信中/配信予定は除外。取得したものは索引 `youtube_archives.json` に記録（チャット取得不可の
-配信も記録して毎回の再取得を防ぐ）。取得負荷の重い配信は少なめ・通常動画は多めの上限を設定。
+- `channels.list` でチャンネルの「アップロード済み」プレイリストIDを取得
+- `playlistItems.list` を新しい順にページングし、未知の動画IDを収集（1ページ丸ごと既知IDに
+  到達したら打ち切り）
+- `videos.list` をバッチ取得し、`liveStreamingDetails` の有無で `type:"stream"/"video"` を判別
+  （配信中でまだ終了していないものは除外し、後日改めて拾う）
+- `youtube_archives.json` に追記。**`number_of_comments` は付与しない**
+  （②のローカルジョブが「チャット未取得」を判定する目印として使うため）
+- `.github/workflows/meta-fetch.yml` で毎時実行。Secret `YOUTUBE_API_KEY` が必要
+  （Google Cloud Console で YouTube Data API v3 を有効化し取得。無料枠1日10,000unitに対し
+  消費は数十〜百unit程度で余裕）。
+
+### ② チャット取得（ローカル）— `youtube_archiver_with_comments_github.py`
+①が書き込んだ索引から、`type:"stream"` かつ `number_of_comments` 未設定（＝チャット未取得）の
+エントリだけを対象に、**yt-dlp の live_chat 字幕機能**でチャットリプレイを取得する
+（chat-downloader は現行 YouTube を解析できないため不採用）。cookie 必須の処理
+（メンバー限定チャンネル対応、bot判定回避）のため、**自宅PCでのローカル実行**が前提。
+
+- `replayChatItemAction` をパースして `{id, offset, text}` に整形
+- メンバー限定も対象（メンバー資格のある cookie を渡した場合のみ実取得。無ければ自動スキップ）
+- 取得後は成功/失敗（0件）に関わらず `number_of_comments` をセットし、再取得を防ぐ
+- チャンネルごとに新しい順で最大 `MAX_NEW_STREAMS_PER_CHANNEL`（既定3）件/回に制限
+  （取得負荷が重いため。枯渇防止でチャンネル単位）
 
 > ⚠️ メンバー限定配信のコメント（本文・投稿者ID）も、収集すれば公開の GitHub Pages で
 > 誰でも閲覧可能になります。承知の上で運用してください。
@@ -37,19 +56,19 @@ YouTube 対応版。
 - `youtube_archives.json` … 収集済みコンテンツの索引（配信＋通常動画）。時系列サイトの主データ。
   **`start_time` の新しい順（降順）にソート**して書き出す。各エントリ:
   ```json
-  // 配信
+  // 配信 (①②とも実行済み)
   { "video_id":"RSGOhFhym8k", "title":"...", "start_time":"2026-08-14T07:10:20+00:00",
     "url":"https://www.youtube.com/watch?v=RSGOhFhym8k", "duration":33509,
     "video_length":"09:18:29", "type":"stream", "channel":"mokouliszt",
     "number_of_comments":21935 }
-  // 通常動画 (コメントなし)
+  // 通常動画 (①のみ。コメントなし)
   { "video_id":"WoC3TpJORaY", "title":"...", "start_time":"2026-08-04T...",
     "url":"...", "duration":451, "video_length":"00:07:31", "type":"video",
     "channel":"mokouliszt" }
+  // 配信だが②未実行 (number_of_comments が無い = チャット取得待ち)
+  { "video_id":"...", "type":"stream", "channel":"mokoustream", ... }
   ```
-  `type` は `"stream"` / `"video"`、`channel` は `CHANNELS` の handle（例 `mokouliszt` / `mokoustream`）。
-  拡張は `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
-  ※ `type`/`channel` 未設定の旧エントリは、次回実行時に列挙結果から自動補完される。
+  拡張/サイトは `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
 - `comments_github/<videoId>_comments.json` … 配信1本ごとのコメント（通常動画には作られない）
   ```json
   {
@@ -63,38 +82,34 @@ YouTube 対応版。
   `offset` は配信開始からの経過秒。フロントは `Math.floor(offset/60)` で1分バケットに集計する。
   古いコメントファイルは30日で削除されるが、索引エントリ（メタ情報）は時系列サイト用に残す。
 
-## 運用: ローカル実行 + push（推奨・採用中）
+## セットアップ
 
-GitHub Actions のデータセンターIPは YouTube に bot 判定されやすいため、**取得は自宅PCで実行**し、
-結果を GitHub へ push して Pages で配信する構成を採用している（Actions の定期実行は無効化済み）。
+### ①メタ収集（GitHub Actions）
+1. Google Cloud Console でプロジェクトを作成し「YouTube Data API v3」を有効化、APIキーを発行。
+2. リポジトリの Settings → Secrets → Actions に `YOUTUBE_API_KEY` として登録。
+3. Actions で `YouTube Meta Fetcher (Data API v3)` ワークフローが毎時自動実行される。
 
-### お試し実行
-
+### ②チャット取得（ローカル + タスクスケジューラ）
 ```bash
 pip install -r requirements.txt
 python youtube_archiver_with_comments_github.py
 ```
-
 `YT_PUBLISH` も `GITHUB_ACTIONS` も無いと出力は `comments_local/`（配信対象外）。
 
-### 定期実行（`run_and_push.ps1` + タスクスケジューラ）
+`run_and_push.ps1` が「git pull → yt-dlp更新 → チャット取得(公開フォルダ出力) → commit → push」
+を行う。実行前に必ず `git pull --rebase` する（① Actions が並行して新規エントリを push する
+ため、最新の索引を見てから「未取得」を判定する必要がある）。
 
-`run_and_push.ps1` が「yt-dlp更新 → 収集(公開フォルダ出力) → commit → push」を行う。
-- 収集は `YT_PUBLISH=1` で `comments_github/` に出力（= Pages 配信対象）。
 - リポジトリ直下に `cookies.txt`（メンバー資格アカウントのもの）を置くと、
   メンバー限定アーカイブも取得対象になる。`.gitignore` 済みでコミットされない。
-- 1回の実行で取得する新規本数は **チャンネルごとに** `MAX_NEW_PER_CHANNEL`（既定3）に制限。
-  追いつくまで少しずつ収集。チャンネル単位なので、先頭チャンネルに未取得が多くても後続チャンネルが枯渇しない。
-- 30日より古いコメントは自動削除（`cleanup_old_comments`）。
 
 Windows タスクスケジューラ登録例（1時間ごと）:
 - プログラム: `powershell.exe`
 - 引数: `-ExecutionPolicy Bypass -NoProfile -File "D:\81801\Documents\YT-extension\youtube-comment-fetcher\run_and_push.ps1"`
 
-### （任意）GitHub Actions を使う場合
-
-`fetch.yml` は定期実行をコメントアウト済み。手動の workflow_dispatch のみ。使うなら Secret
-`YT_COOKIES` が必要（データセンターIPでメンバー垢を使うのは凍結リスク高め）。
+### （緊急時フォールバック）
+`fetch.yml` は旧・統合版（yt-dlp でメタ+チャット両方）で、手動実行のみ。ローカルPCが使えない
+緊急時用。データセンターIPで bot 判定されやすいため、使うなら Secret `YT_COOKIES` を推奨。
 
 ## 配信（GitHub Pages）
 

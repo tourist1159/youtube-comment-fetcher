@@ -1,0 +1,49 @@
+name: YouTube Meta Fetcher (Data API v3)
+
+on:
+  schedule:
+    # 毎時0分に実行
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # push するために必要
+
+# 同時実行を防ぐ (前回のジョブが長引いても二重取得しない)
+concurrency:
+  group: yt-meta-fetch
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # yt-dlp 不使用・stdlib のみで動くため pip install は不要
+
+      - name: Run YouTube meta fetcher
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: python youtube_meta_fetcher.py
+
+      - name: Pull latest before commit
+        run: git pull --rebase
+
+      - name: Commit and push updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Update YouTube archive metadata [skip ci]" || echo "No changes"
+          git push

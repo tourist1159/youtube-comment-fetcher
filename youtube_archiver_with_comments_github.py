@@ -1,13 +1,20 @@
 """
 YouTube ライブ配信アーカイブのチャットリプレイを取得し、コメント流量グラフ用の
-JSON を生成するスクリプト。
+JSON を生成するスクリプト（ローカル専用）。
 
-Kick 版 (kick_archiver_with_comments_github.py) の構造を踏襲:
-  索引読込 → 新規差分検出 → 各動画のチャット取得 → 保存 → 索引更新 → 古いデータ削除
+動画/配信の「メタ情報」収集 (タイトル・開始時刻・長さ・配信/動画の判別) は
+youtube_meta_fetcher.py が YouTube Data API v3 で GitHub Actions 上で行う。
+このスクリプトは youtube_archives.json を読み込み、まだチャットを取得していない
+配信 (type=="stream" かつ number_of_comments 未設定) だけを対象に、
+yt-dlp の live_chat 字幕機能でチャットリプレイを取得する。
+cookie 必須の処理 (メンバー限定チャンネル等) のため、bot 判定を避けやすい
+自宅IPでのローカル実行を前提にしている (chat-downloader は現行 YouTube を
+パースできず ParsingError になるため不採用)。
 
-データ源のみ Kick API から YouTube (yt-dlp で列挙 / chat-downloader でチャット取得) に差し替え。
-出力フォーマットもフロント (sortcomments/commentgraph.js) がそのまま使えるよう合わせている。
-ただしタイムスタンプは「配信開始からの経過秒 offset」で保存する (リプレイの time_in_seconds)。
+運用: run_and_push.ps1 + タスクスケジューラでこのスクリプトを定期実行し、
+結果を GitHub へ push する。GitHub Actions 側 (meta-fetch.yml) が並行して
+新規エントリを追加するため、実行前に必ず `git pull --rebase` すること
+(run_and_push.ps1 で対応済み)。
 """
 
 import json
@@ -23,26 +30,13 @@ from datetime import datetime, timedelta, timezone
 # (chat-downloader は現行 YouTube をパースできず ParsingError になるため不採用)。
 from yt_dlp import YoutubeDL
 
-# すべての print() を stderr に出す (Kick 版と同じ。JSON を stdout に混ぜないため)
+# すべての print() を stderr に出す (JSON を stdout に混ぜないため)
 print = functools.partial(print, file=sys.stderr, flush=True)
 
-# === ユーザーが指定する基準日時 (ここより後の配信のみ対象) ===
-USER_START_DATE = "2026-08-01T00:00:00+09:00"
-
-# === 対象チャンネル ===
-CHANNELS = [
-    {"handle": "mokouliszt",  "channel_id": "UCZFxcWJS1_iVIFETARRRHZQ"},
-    {"handle": "mokoustream", "channel_id": "UCENoC6MLc4pL-vehJyzSWmg"},
-]
-
 # === 動作パラメータ ===
-# 1回の実行で「チャンネルごとに」新規取得する最大本数。チャンネル単位にすることで、
-# 先頭チャンネルに未取得が多くても後続チャンネルが枯渇しない。
-# 配信はチャットDLが重いので少なめ、通常動画はメタのみで速いので多め。
+# 1回の実行で「チャンネルごとに」新規取得する最大本数 (チャットDLは重いので少なめ)。
+# チャンネル単位にすることで、一方のチャンネルに未取得が多くても他方が枯渇しない。
 MAX_NEW_STREAMS_PER_CHANNEL = 3
-MAX_NEW_VIDEOS_PER_CHANNEL = 30
-# 各タブ (streams / videos) から拾う最大件数 (新しい順)
-SCAN_LIMIT = 80
 # コメント1件あたりのテキスト最大長 (肥大化防止)
 MAX_TEXT_LEN = 200
 
@@ -53,9 +47,9 @@ ARCHIVE_FILE = "youtube_archives.json"
 os.makedirs(COMMENTS_GITHUB, exist_ok=True)
 os.makedirs(COMMENTS_LOCAL, exist_ok=True)
 
-# cookies の指定 (bot 判定対策)。どちらか一方を使う。
-#  - YT_COOKIES_FILE:         Netscape 形式 cookies.txt のパス (GitHub Actions 用: Secret から生成)
-#  - YT_COOKIES_FROM_BROWSER: インストール済みブラウザから直接読む (ローカル用)。
+# cookies の指定 (bot 判定対策 / メンバー限定チャンネル対応)。どちらか一方を使う。
+#  - YT_COOKIES_FILE:         Netscape 形式 cookies.txt のパス
+#  - YT_COOKIES_FROM_BROWSER: インストール済みブラウザから直接読む。
 #                             例 "firefox" / "chrome" / "edge" / "chrome:Default"
 COOKIES_FILE = os.getenv("YT_COOKIES_FILE") or None
 COOKIES_FROM_BROWSER = os.getenv("YT_COOKIES_FROM_BROWSER") or None
@@ -73,27 +67,7 @@ def get_comment_dir():
     return COMMENTS_LOCAL
 
 
-# === ユーティリティ ===
-def format_duration(seconds):
-    """秒を HH:MM:SS に整形。"""
-    try:
-        s = int(seconds)
-        return time.strftime("%H:%M:%S", time.gmtime(s))
-    except Exception:
-        return "00:00:00"
-
-
-def unix_to_iso(ts):
-    """unix 秒 → ISO8601 (UTC)。"""
-    if ts is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(ts), tz=timezone.utc).isoformat()
-    except Exception:
-        return None
-
-
-# === アーカイブ列挙 (yt-dlp) ===
+# === yt-dlp オプション ===
 def _ydl_opts(extra=None):
     opts = {
         "quiet": True,
@@ -101,71 +75,19 @@ def _ydl_opts(extra=None):
         "noprogress": True,
         "skip_download": True,
         "ignoreerrors": True,
-        # 我々は動画フォーマットを一切使わない (メタ情報 + live_chat 字幕のみ)。
-        # ログイン cookie を渡すと YouTube がフォーマットに PO トークンを要求し
-        # "Requested format is not available" でフォーマット選択が失敗するため、
-        # フォーマット不在をエラーにせず、メタ/字幕の取得を続行させる。
+        # 動画フォーマットは一切使わない (live_chat 字幕のみ)。ログイン cookie を渡すと
+        # YouTube がフォーマットに PO トークンを要求し "Requested format is not
+        # available" でフォーマット選択が失敗するため、それをエラーにせず続行させる。
         "ignore_no_formats_error": True,
     }
     if COOKIES_FILE:
         opts["cookiefile"] = COOKIES_FILE
     if COOKIES_FROM_BROWSER:
-        # "browser" または "browser:profile" 形式を受け付ける
         name, _, profile = COOKIES_FROM_BROWSER.partition(":")
         opts["cookiesfrombrowser"] = (name.strip(), profile.strip() or None, None, None)
     if extra:
         opts.update(extra)
     return opts
-
-
-def list_tab_ids(channel_id, tab):
-    """チャンネルの指定タブ (tab="streams": 過去ライブ / "videos": 通常動画) を
-    flat で列挙し、videoId のリストを返す。新しい順。"""
-    url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
-    opts = _ydl_opts({
-        "extract_flat": "in_playlist",
-        "playlistend": SCAN_LIMIT,
-    })
-    ids = []
-    try:
-        with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-        entries = (info or {}).get("entries") or []
-        for e in entries:
-            if not e:
-                continue
-            vid = e.get("id")
-            if vid:
-                ids.append(vid)
-    except Exception as e:
-        print(f"[{channel_id}/{tab}] 列挙エラー: {e}")
-    return ids
-
-
-def fetch_video_meta(video_id):
-    """単体動画のメタ情報 (配信開始・長さ・was_live・タイトル) を取得。"""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    try:
-        with YoutubeDL(_ydl_opts()) as ydl:
-            info = ydl.extract_info(url, download=False)
-    except Exception as e:
-        print(f"[{video_id}] メタ取得エラー: {e}")
-        return None
-    if not info:
-        return None
-
-    # 配信開始時刻: was_live は release_timestamp が実際の開始。無ければ timestamp。
-    start_unix = info.get("release_timestamp") or info.get("timestamp")
-    duration = info.get("duration") or 0
-    return {
-        "video_id": video_id,
-        "title": info.get("title") or "",
-        "start_time": unix_to_iso(start_unix),
-        "url": url,
-        "duration": duration,
-        "video_length": format_duration(duration),
-        "live_status": info.get("live_status"),  # 'was_live' / 'not_live' / 'is_live' など
-    }
 
 
 # === コメント取得 (yt-dlp live_chat) ===
@@ -295,7 +217,8 @@ def update_archive_data(archives):
 
 
 def cleanup_old_comments():
-    """30日より古いコメントJSONを削除 (GitHub フォルダのみ)。索引からも除去。Kick 版と同じ発想。"""
+    """30日より古いコメントJSONを削除 (GitHub フォルダのみ)。索引エントリ (メタ情報) は
+    時系列サイト用に残す。Kick 版と同じ発想。"""
     limit = datetime.now(timezone.utc) - timedelta(days=30)
     removed_ids = set()
 
@@ -322,114 +245,52 @@ def cleanup_old_comments():
     return removed_ids
 
 
-# === 1タブ分の収集 ===
-def process_tab(ch, tab, ids, collect_chat, cap, known_ids, local_archives, user_start_dt):
-    """指定タブ (streams/videos) の videoId リストを新しい順に走査し、新規を最大 cap 件まで収集する。
+# === 未処理の配信を選ぶ ===
+def select_pending_streams(archives, cap_per_channel):
+    """type=='stream' かつ number_of_comments 未設定のエントリを、
+    チャンネルごとに新しい順で最大 cap_per_channel 件ずつ選ぶ。
 
-    collect_chat=True の配信のみチャットを取得・保存する。通常動画はメタ情報のみ。
-    戻り値: 今回このタブで取得した件数。
+    「number_of_comments が存在する」を処理済みの目印にしている
+    (0件でもチャット無し/アクセス不可として処理済みにする。毎回リトライして
+    枠を専有するのを防ぐ)。channel は youtube_meta_fetcher.py が付与する。
     """
-    n = 0
-    for video_id in ids:
-        if n >= cap:
-            break
-        if video_id in known_ids:
+    by_channel = {}
+    for a in archives:
+        if a.get("type") != "stream":
             continue
-
-        meta = fetch_video_meta(video_id)
-        if not meta or not meta["start_time"]:
+        if "number_of_comments" in a:
             continue
+        by_channel.setdefault(a.get("channel"), []).append(a)
 
-        start_dt = datetime.fromisoformat(meta["start_time"])
-        # 新しい順なので、基準日時より古い動画に到達したら以降は全て古い → 打ち切り。
-        if start_dt < user_start_dt:
-            print(f"    基準日時より古いため打ち切り: {video_id} ({meta['start_time']})")
-            break
-        # まだ配信中/配信予定のものは除外 (アーカイブ化後に取得する)。
-        if meta.get("live_status") in ("is_live", "is_upcoming"):
-            print(f"    まだ配信中/予定のためスキップ: {video_id}")
-            continue
-
-        is_stream = meta.get("live_status") in ("was_live", "post_live")
-        meta["type"] = "stream" if is_stream else "video"
-        meta["channel"] = ch["handle"]  # どのチャンネルのものか
-        meta.pop("live_status", None)
-
-        # 配信のみコメント取得 (通常動画はコメント不要)。
-        if collect_chat and is_stream:
-            comments = get_chat_comments(video_id)
-            meta["number_of_comments"] = len(comments)
-            save_comment_stats(meta, comments)
-
-        print(f"  新規[{meta['type']}/{ch['handle']}]: {meta['title']} ({video_id})")
-        # コメント有無に関わらず「処理済み」として索引に記録する。
-        # こうしないとチャット無し/アクセス不可のものを毎回リトライし続け、枠を専有してしまう。
-        # 後で再取得したい場合は youtube_archives.json から該当エントリを削除すればよい。
-        local_archives.append(meta)
-        known_ids.add(video_id)
-        n += 1
-        update_archive_data(local_archives)  # 各件ごとに索引保存 (途中終了に強く)
-        time.sleep(1)
-    return n
-
-
-def backfill_channel_type(local_archives, id_meta):
-    """channel / type が無い既存(レガシー)エントリを、今回の列挙結果から補完する。"""
-    changed = 0
-    for a in local_archives:
-        info = id_meta.get(a["video_id"])
-        if not info:
-            continue
-        handle, ttype = info
-        if not a.get("channel"):
-            a["channel"] = handle
-            changed += 1
-        if not a.get("type"):
-            a["type"] = ttype
-            changed += 1
-    if changed:
-        print(f"🔧 レガシーエントリを補完: {changed} フィールド")
+    selected = []
+    for items in by_channel.values():
+        items.sort(key=_start_key, reverse=True)
+        selected.extend(items[:cap_per_channel])
+    return selected
 
 
 # === メイン ===
 def main():
     try:
-        print("YouTube 収集を開始...")
+        print("YouTube チャット取得を開始 (ローカル)...")
         local_archives = load_local_archives()
-        known_ids = {a["video_id"] for a in local_archives}
-        user_start_dt = datetime.fromisoformat(USER_START_DATE).astimezone(timezone.utc)
+        pending = select_pending_streams(local_archives, MAX_NEW_STREAMS_PER_CHANNEL)
+        print(f"未処理の配信: {len(pending)} 件")
 
-        total_new = 0
-        id_meta = {}  # video_id -> (channel_handle, type)  ※レガシー補完にも使う
-        for ch in CHANNELS:
-            print(f"--- チャンネル: {ch['handle']} ---")
-            stream_ids = list_tab_ids(ch["channel_id"], "streams")
-            video_ids = list_tab_ids(ch["channel_id"], "videos")
-            print(f"  streams {len(stream_ids)} 件 / videos {len(video_ids)} 件を検出")
-            for vid in stream_ids:
-                id_meta.setdefault(vid, (ch["handle"], "stream"))
-            for vid in video_ids:
-                id_meta.setdefault(vid, (ch["handle"], "video"))
+        for entry in pending:
+            video_id = entry["video_id"]
+            print(f"  取得中: {entry.get('title', '')[:40]} ({video_id})")
+            comments = get_chat_comments(video_id)
+            entry["number_of_comments"] = len(comments)
+            save_comment_stats(entry, comments)
+            update_archive_data(local_archives)  # 各件ごとに索引保存 (途中終了に強く)
+            time.sleep(2)
 
-            # 配信 (コメント付き)
-            total_new += process_tab(
-                ch, "streams", stream_ids, collect_chat=True, cap=MAX_NEW_STREAMS_PER_CHANNEL,
-                known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
-            # 通常動画 (メタ情報のみ)
-            total_new += process_tab(
-                ch, "videos", video_ids, collect_chat=False, cap=MAX_NEW_VIDEOS_PER_CHANNEL,
-                known_ids=known_ids, local_archives=local_archives, user_start_dt=user_start_dt)
-
-        # 既存(type/channel 未設定)エントリを補完し、ソートして書き出す
-        backfill_channel_type(local_archives, id_meta)
-        update_archive_data(local_archives)
-
-        if total_new == 0:
-            print("新しいアーカイブ/動画はありません。")
+        if not pending:
+            print("チャット未取得の配信はありません。")
 
         # 30日より古い「コメントファイル」は削除して容量を抑える。
-        # ただし索引エントリ (メタ情報) は時系列サイト用に残す。
-        # → 古い配信はグラフが出なくなるだけで、タイムライン上には残り続ける。
+        # 索引エントリ (メタ情報) は時系列サイト用に残す。
         cleanup_old_comments()
 
         print("✨ 完了")
