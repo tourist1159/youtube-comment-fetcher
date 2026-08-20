@@ -23,14 +23,19 @@ YouTube 対応版。
 メタ情報収集とチャット取得は、bot判定リスクの違いから**別スクリプト・別実行環境**に分けている。
 
 ### ① メタ情報収集（クラウド・GitHub Actions）— `youtube_meta_fetcher.py`
-YouTube **Data API v3**（公式API）を使い、タイトル・開始時刻・長さ・配信/通常動画の判別を取得する。
-yt-dlp を使わないため GitHub Actions のデータセンターIPでも bot 判定を受けない。
+新規動画IDの**列挙**は yt-dlp の flat 抽出（`/streams`・`/videos` タブ一覧、軽量）、
+タイトル・開始時刻・長さ・配信/通常動画の**判別**は YouTube **Data API v3**（公式API）
+で行うハイブリッド方式。
 
-- `channels.list` でチャンネルの「アップロード済み」プレイリストIDを取得
-- `playlistItems.list` を新しい順にページングし、未知の動画IDを収集（1ページ丸ごと既知IDに
-  到達したら打ち切り）
-- `videos.list` をバッチ取得し、`liveStreamingDetails` の有無で `type:"stream"/"video"` を判別
-  （配信中でまだ終了していないものは除外し、後日改めて拾う）
+- yt-dlp で `/streams`・`/videos` タブを新しい順に flat 列挙し、未知の動画IDを収集
+  （1件ずつのフル `extract_info` とは異なる軽量な一覧取得のため、GitHub Actions の
+  データセンターIPでも bot 判定を受けにくい）
+- 列挙だけ yt-dlp を使う理由: **アップロード済みプレイリスト（Data APIが見る場所）への
+  反映には配信終了から数十分〜数時間のラグがあるが、`/streams` タブは先に更新される**
+  ことを実測で確認したため（2026-08-19）。フォールバックとして、yt-dlp列挙で新規が
+  0件のときのみ Data API の `channels.list`→`playlistItems.list` でも追加確認する
+- 新規動画IDを `videos.list` でバッチ取得し、`liveStreamingDetails` の有無で
+  `type:"stream"/"video"` を判別（配信中でまだ終了していないものは除外し、後日改めて拾う）
 - `youtube_archives.json` に追記。**`number_of_comments` は付与しない**
   （②のローカルジョブが「チャット未取得」を判定する目印として使うため）
 - `.github/workflows/meta-fetch.yml` で毎時実行。Secret `YOUTUBE_API_KEY` が必要

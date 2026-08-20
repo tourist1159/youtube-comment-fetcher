@@ -1,17 +1,23 @@
 """
-YouTube 動画/配信の「メタ情報」を YouTube Data API v3 で収集するスクリプト。
+YouTube 動画/配信の「メタ情報」を収集するスクリプト。
 
-yt-dlp (youtube_archiver_with_comments_github.py) はチャットリプレイ取得専用に残し、
-こちらはメタ情報 (タイトル・開始時刻・長さ・配信/動画の判別) だけを公式APIで取得する。
-GitHub Actions のデータセンターIPでも yt-dlp のような bot 判定を受けないため、
-クラウド(Actions)側で完結できる。stdlib のみで動作し、追加の pip 依存は無い。
+新規動画IDの列挙は yt-dlp の flat 抽出 (/streams・/videos タブ一覧) で行い、
+詳細情報 (タイトル・開始時刻・長さ・配信/動画の判別) は YouTube Data API v3 で取得する。
 
-仕組み:
-  channels.list でチャンネルの「アップロード済み」プレイリストIDを取得
-  → playlistItems.list を新しい順にページングし、未知の video_id を集める
-  → videos.list をバッチ取得し、liveStreamingDetails の有無で配信/動画を判別
-  → youtube_archives.json に追記 (number_of_comments は付与しない = チャット取得の
-     ローカルジョブが「未処理」を判定する目印にする)。
+なぜ列挙だけ yt-dlp なのか: 実測の結果、配信終了後に "アップロード済み" プレイリスト
+(Data API の playlistItems.list が見る場所) へ反映されるまでには数十分〜数時間のラグが
+あり、/streams タブの方が先に更新されることを確認した (2026-08-19)。一方、以前 bot 判定
+を受けたのは *1件ずつの詳細取得* (yt_dlp.extract_info によるフル innertube 呼び出し) で
+あり、flat 抽出 (タブの一覧取得のみ、軽量) は別の処理系なのでリスクは大きく異なる。
+詳細取得は今までどおり Data API に任せる (bot 判定の懸念が無い公式API)。
+
+flat 抽出が失敗/ブロックされた場合に備え、Data API の
+channels.list→playlistItems.list によるアップロード済みプレイリスト列挙を
+フォールバックとして残してある (yt-dlp で新規候補が0件のときのみ追加で確認)。
+
+チャットリプレイ取得は youtube_archiver_with_comments_github.py (ローカル専用) が
+別途行う。number_of_comments は付与しない (= チャット取得のローカルジョブが
+「未処理」を判定する目印にする)。
 """
 
 import json
@@ -23,6 +29,8 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+
+from yt_dlp import YoutubeDL
 
 print = functools.partial(print, file=sys.stderr, flush=True)
 
@@ -40,6 +48,39 @@ ARCHIVE_FILE = "youtube_archives.json"
 # 1チャンネルあたりのページング上限 (50件/ページ)。安全弁であり、通常は
 # 「既知IDのみのページに到達」した時点でもっと早く止まる。
 PLAYLIST_PAGE_LIMIT = 10
+# yt-dlp flat 抽出で1タブあたり拾う最大件数 (新しい順)
+SCAN_LIMIT = 80
+
+
+# === 新規動画IDの列挙 (yt-dlp flat 抽出、/streams・/videos タブ) ===
+def list_channel_video_ids_yt_dlp(channel_id):
+    """/streams と /videos タブを新しい順に flat 列挙し、videoId のリストを返す。
+
+    extract_flat のみを使う軽量な一覧取得 (1件ずつのフル extract_info とは異なる)。
+    タブ単位で例外を握りつぶし、一方が失敗しても他方は取得を試みる。
+    """
+    ids = []
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "skip_download": True,
+        "ignoreerrors": True,
+        "extract_flat": "in_playlist",
+        "playlistend": SCAN_LIMIT,
+    }
+    for tab in ("streams", "videos"):
+        url = f"https://www.youtube.com/channel/{channel_id}/{tab}"
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            entries = (info or {}).get("entries") or []
+            for e in entries:
+                if e and e.get("id"):
+                    ids.append(e["id"])
+        except Exception as e:
+            print(f"  yt-dlp列挙エラー [{tab}]: {e}")
+    return ids
 
 
 # === YouTube Data API 呼び出し ===
@@ -220,13 +261,25 @@ def main():
     for ch in CHANNELS:
         print(f"--- チャンネル: {ch['handle']} ---")
         try:
-            uploads_id = fetch_uploads_playlist_id(ch["channel_id"])
-            if not uploads_id:
-                print(f"  uploadsプレイリストの取得に失敗、スキップ")
-                continue
+            # 1) yt-dlp flat 抽出 (最新の /streams・/videos タブを直接見るため反映が早い)
+            candidate_ids = list_channel_video_ids_yt_dlp(ch["channel_id"])
+            seen = set()
+            new_ids = []
+            for vid in candidate_ids:
+                if vid in known_ids or vid in seen:
+                    continue
+                seen.add(vid)
+                new_ids.append(vid)
+            print(f"  yt-dlp列挙: 新規候補 {len(new_ids)} 件")
 
-            new_ids = list_new_video_ids(uploads_id, known_ids)
-            print(f"  新規候補 {len(new_ids)} 件")
+            # 2) フォールバック: yt-dlpで新規が見つからなかった場合のみ、念のため
+            #    Data API のアップロード済みプレイリストでも確認する (安価: 数unit)。
+            if not new_ids:
+                uploads_id = fetch_uploads_playlist_id(ch["channel_id"])
+                if uploads_id:
+                    new_ids = list_new_video_ids(uploads_id, known_ids)
+                    if new_ids:
+                        print(f"  フォールバック(Data API)で新規候補 {len(new_ids)} 件")
 
             for batch in chunks(new_ids, 50):
                 details = fetch_video_details(batch)
