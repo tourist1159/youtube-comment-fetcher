@@ -45,6 +45,12 @@ CHANNELS = [
 ]
 
 ARCHIVE_FILE = "youtube_archives.json"
+# 再生数を最後に一括更新した時刻の置き場。youtube_archives.json は「配列」で
+# サイト側がそのまま読むため、時刻のような付帯情報はここに分ける。
+STATE_FILE = "meta_state.json"
+# 再生数の一括更新の間隔 (12時間)。新規動画は収集時に statistics ごと取るので、
+# ここは「既に載っている動画の数字を最新に直す」ための間隔。
+VIEW_REFRESH_SECONDS = 12 * 3600
 # 1チャンネルあたりのページング上限 (50件/ページ)。安全弁であり、通常は
 # 「既知IDのみのページに到達」した時点でもっと早く止まる。
 PLAYLIST_PAGE_LIMIT = 10
@@ -138,11 +144,25 @@ def list_new_video_ids(uploads_playlist_id, known_ids):
 def fetch_video_details(video_ids):
     if not video_ids:
         return []
+    # statistics (再生数) を足してもコストは変わらない。videos.list は
+    # 「1回の呼び出しにつき1ユニット」でパーツ数に依らない (50件まで/回)。
     data = api_get("videos", {
-        "part": "snippet,contentDetails,liveStreamingDetails",
+        "part": "snippet,contentDetails,liveStreamingDetails,statistics",
         "id": ",".join(video_ids),
     })
     return data.get("items") or []
+
+
+def extract_view_count(v):
+    """videos.list の1件から再生数を取り出す。取れなければ None。
+
+    視聴回数を非公開にしている動画では statistics.viewCount 自体が返らない。
+    """
+    raw = (v.get("statistics") or {}).get("viewCount")
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 # === ユーティリティ ===
@@ -204,7 +224,7 @@ def classify_entry(v, ch, user_start_dt):
         return None
 
     duration_sec = parse_iso8601_duration(content.get("duration"))
-    return {
+    entry = {
         "video_id": vid,
         "title": snippet.get("title") or "",
         "start_time": start_dt.isoformat(),
@@ -214,6 +234,10 @@ def classify_entry(v, ch, user_start_dt):
         "type": entry_type,
         "channel": ch["handle"],
     }
+    views = extract_view_count(v)
+    if views is not None:
+        entry["view_count"] = views
+    return entry
 
 
 def chunks(seq, n):
@@ -244,6 +268,71 @@ def update_archive_data(archives):
     with open(ARCHIVE_FILE, "w", encoding="utf-8") as f:
         json.dump(archives, f, ensure_ascii=False, indent=2)
     print(f"📁 {ARCHIVE_FILE} 更新完了 ({len(archives)}件)")
+
+
+# === 再生数の定期更新 ===
+def load_state():
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+
+
+def view_counts_are_due(state):
+    """再生数の一括更新をする回かどうか (前回から VIEW_REFRESH_SECONDS 経過したか)。
+
+    このスクリプト自体は毎時走るが、そのたびに全件の view_count を書き換えると
+    youtube_archives.json が毎時コミットされ、そのたびに GitHub Pages の再ビルドが
+    走ってしまう (mokou-timeline 側で同じ問題を起こして cron を間引かれた前例あり)。
+    再生数は分単位の鮮度が要らないので、半日に1回だけ更新する。
+    """
+    last = state.get("view_counts_updated_at")
+    if not last:
+        return True, "初回"
+    try:
+        last_dt = datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return True, "前回時刻が不正"
+    if last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    age = int((datetime.now(timezone.utc) - last_dt).total_seconds())
+    if age >= VIEW_REFRESH_SECONDS:
+        return True, f"前回から{age // 3600}時間経過"
+    return False, f"前回から{age // 3600}時間{age % 3600 // 60}分 (次は{VIEW_REFRESH_SECONDS // 3600}時間ごと)"
+
+
+def refresh_view_counts(archives):
+    """既知エントリ全件の再生数を videos.list で取り直す。更新した件数を返す。
+
+    50件で1呼び出し=1ユニットなので、数十〜数百件でも1日あたり数ユニットで収まる
+    (1日の割り当ては10,000ユニット)。
+    """
+    ids = [a["video_id"] for a in archives if a.get("video_id")]
+    if not ids:
+        return 0
+    by_id = {a["video_id"]: a for a in archives}
+    changed = 0
+    for batch in chunks(ids, 50):
+        try:
+            for v in fetch_video_details(batch):
+                entry = by_id.get(v.get("id"))
+                views = extract_view_count(v)
+                if entry is None or views is None:
+                    continue
+                if entry.get("view_count") != views:
+                    entry["view_count"] = views
+                    changed += 1
+        except Exception as e:
+            # 一部のバッチが失敗しても、取れたぶんはそのまま活かす
+            print(f"  再生数の取得に失敗 ({len(batch)}件): {e}")
+    print(f"👁 再生数を更新: {changed}件 / {len(ids)}件中 (API {(len(ids) + 49) // 50} 回)")
+    return changed
 
 
 # === メイン ===
@@ -293,6 +382,17 @@ def main():
                     print(f"  新規[{entry['type']}]: {entry['title'][:40]} ({entry['video_id']})")
         except Exception as e:
             print(f"[{ch['handle']}] 収集エラー: {e}")
+
+    # 既に載っている動画の再生数を半日に1回だけ取り直す
+    state = load_state()
+    due, reason = view_counts_are_due(state)
+    if due:
+        print(f"--- 再生数の更新 ({reason}) ---")
+        refresh_view_counts(local_archives)
+        state["view_counts_updated_at"] = datetime.now(timezone.utc).isoformat()
+        save_state(state)
+    else:
+        print(f"⏭ 再生数の更新はスキップ ({reason})")
 
     update_archive_data(local_archives)
 
