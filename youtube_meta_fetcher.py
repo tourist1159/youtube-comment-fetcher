@@ -60,12 +60,17 @@ SCAN_LIMIT = 80
 
 # === 新規動画IDの列挙 (yt-dlp flat 抽出、/streams・/videos タブ) ===
 def list_channel_video_ids_yt_dlp(channel_id):
-    """/streams と /videos タブを新しい順に flat 列挙し、videoId のリストを返す。
+    """/streams と /videos タブを新しい順に flat 列挙し、[(videoId, メンバー限定か)] を返す。
 
     extract_flat のみを使う軽量な一覧取得 (1件ずつのフル extract_info とは異なる)。
     タブ単位で例外を握りつぶし、一方が失敗しても他方は取得を試みる。
+
+    メンバー限定は flat 抽出の availability が "subscriber_only" になる (サムネの
+    「メンバー限定」バッジ由来。実測で7件すべて一致)。Data API 側にはこれを直接示す
+    フィールドが無く、メンバー限定動画は statistics 自体が返らない (=再生数も取れない)
+    ため、判別はこちらで行う。
     """
-    ids = []
+    found = []
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -83,10 +88,34 @@ def list_channel_video_ids_yt_dlp(channel_id):
             entries = (info or {}).get("entries") or []
             for e in entries:
                 if e and e.get("id"):
-                    ids.append(e["id"])
+                    found.append((e["id"], e.get("availability") == "subscriber_only"))
         except Exception as e:
             print(f"  yt-dlp列挙エラー [{tab}]: {e}")
-    return ids
+    return found
+
+
+def apply_members_only(archives, listed):
+    """flat 列挙で見えた範囲について、既知エントリの members_only を最新の状態に直す。
+
+    毎回の列挙で無料で分かる情報なので、新規収集時だけでなく毎回付け直す
+    (メンバー限定を後から解除する運用があるため)。列挙に出てこなかった古い動画は
+    触らない (SCAN_LIMIT 件までしか見ていないため、消してしまうと誤りになる)。
+    """
+    by_id = {a["video_id"]: a for a in archives}
+    changed = 0
+    for vid, is_members in listed:
+        entry = by_id.get(vid)
+        if entry is None:
+            continue
+        if is_members and not entry.get("members_only"):
+            entry["members_only"] = True
+            changed += 1
+        elif not is_members and entry.get("members_only"):
+            del entry["members_only"]
+            changed += 1
+    if changed:
+        print(f"🔒 メンバー限定フラグを更新: {changed}件")
+    return changed
 
 
 # === YouTube Data API 呼び出し ===
@@ -351,10 +380,13 @@ def main():
         print(f"--- チャンネル: {ch['handle']} ---")
         try:
             # 1) yt-dlp flat 抽出 (最新の /streams・/videos タブを直接見るため反映が早い)
-            candidate_ids = list_channel_video_ids_yt_dlp(ch["channel_id"])
+            listed = list_channel_video_ids_yt_dlp(ch["channel_id"])
+            # 既知エントリのメンバー限定フラグを、この列挙結果で最新に保つ
+            apply_members_only(local_archives, listed)
+            members_only_ids = {vid for vid, is_members in listed if is_members}
             seen = set()
             new_ids = []
-            for vid in candidate_ids:
+            for vid, _ in listed:
                 if vid in known_ids or vid in seen:
                     continue
                 seen.add(vid)
@@ -376,6 +408,8 @@ def main():
                     entry = classify_entry(v, ch, user_start_dt)
                     if entry is None:
                         continue
+                    if entry["video_id"] in members_only_ids:
+                        entry["members_only"] = True
                     local_archives.append(entry)
                     known_ids.add(entry["video_id"])
                     total_new += 1

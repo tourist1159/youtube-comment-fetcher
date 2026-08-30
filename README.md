@@ -38,6 +38,11 @@ YouTube 対応版。
   `type:"stream"/"video"` を判別（配信中でまだ終了していないものは除外し、後日改めて拾う）
 - `youtube_archives.json` に追記。**`number_of_comments` は付与しない**
   （②のローカルジョブが「チャット未取得」を判定する目印として使うため）
+- **メンバー限定 `members_only`**: flat 抽出の `availability == "subscriber_only"`（サムネの
+  「メンバー限定」バッジ由来）で判別する。Data API 側にこれを直接示すフィールドは無く、
+  **メンバー限定動画は `statistics` 自体が返らない**（＝再生数も取得できない）。列挙は毎回
+  行っているので、新規収集時だけでなく毎回付け直す（後からメンバー限定を解除する運用に追従）。
+  列挙範囲（`SCAN_LIMIT` 件）より古いエントリのフラグは触らない
 - **再生数 `view_count`**: `videos.list` の part に `statistics` を足して取得する。
   パーツを増やしてもコストは変わらない（videos.list は1回の呼び出しにつき1ユニット、50件まで）。
   新規動画は収集時に入るが、既存動画の数字は古くなるので**12時間ごとに全件を取り直す**
@@ -78,6 +83,8 @@ YouTube 対応版。
   { "video_id":"WoC3TpJORaY", "title":"...", "start_time":"2026-08-04T...",
     "url":"...", "duration":451, "video_length":"00:07:31", "type":"video",
     "channel":"mokouliszt", "view_count":98765 }
+  // メンバー限定配信 (再生数は YouTube が公開していないため view_count が付かない)
+  { "video_id":"...", "type":"stream", "channel":"mokouliszt", "members_only":true, ... }
   // 配信だが②未実行 (number_of_comments が無い = チャット取得待ち)
   { "video_id":"...", "type":"stream", "channel":"mokoustream", ... }
   ```
