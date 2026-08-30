@@ -41,7 +41,8 @@
     "video_length": "04:22:05",
     "type": "stream",
     "channel": "mokouliszt",
-    "number_of_comments": 7297
+    "number_of_comments": 7297,
+    "members_only": true
   },
   {
     "video_id": "bMZYPaGtils",
@@ -152,7 +153,8 @@
     "video_length": "02:29:09",
     "type": "stream",
     "channel": "mokouliszt",
-    "number_of_comments": 1257
+    "number_of_comments": 1257,
+    "members_only": true
   },
   {
     "video_id": "jyP3wltW8r4",
@@ -163,7 +165,8 @@
     "video_length": "01:02:55",
     "type": "stream",
     "channel": "mokouliszt",
-    "number_of_comments": 6885
+    "number_of_comments": 6885,
+    "members_only": true
   },
   {
     "video_id": "vp1lxrIOaTw",
@@ -252,7 +255,8 @@
     "video_length": "02:30:31",
     "number_of_comments": 18593,
     "channel": "mokouliszt",
-    "type": "stream"
+    "type": "stream",
+    "members_only": true
   },
   {
     "video_id": "lnLoAbjfH_g",
@@ -263,7 +267,8 @@
     "video_length": "02:10:36",
     "number_of_comments": 3395,
     "channel": "mokouliszt",
-    "type": "stream"
+    "type": "stream",
+    "members_only": true
   },
   {
     "video_id": "-k6Jaklhl9E",
@@ -285,7 +290,8 @@
     "video_length": "03:11:42",
     "number_of_comments": 21932,
     "channel": "mokouliszt",
-    "type": "stream"
+    "type": "stream",
+    "members_only": true
   },
   {
     "video_id": "DN5ymLbrpPk",
@@ -465,6 +471,7 @@
     "video_length": "00:01:36",
     "number_of_comments": 0,
     "channel": "mokouliszt",
-    "type": "stream"
+    "type": "stream",
+    "members_only": true
   }
 ]
