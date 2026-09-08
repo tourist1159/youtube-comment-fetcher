@@ -179,6 +179,8 @@ def fetch_video_details(video_ids):
         "part": "snippet,contentDetails,liveStreamingDetails,statistics",
         "id": ",".join(video_ids),
     })
+    print(f"video_ids: {video_ids}")
+    print(f"API Response: {data}")
     return data.get("items") or []
 
 
