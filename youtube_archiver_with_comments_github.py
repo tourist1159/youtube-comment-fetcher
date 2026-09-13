@@ -11,14 +11,20 @@ cookie 必須の処理 (メンバー限定チャンネル等) のため、bot �
 自宅IPでのローカル実行を前提にしている (chat-downloader は現行 YouTube を
 パースできず ParsingError になるため不採用)。
 
+cookies.txt (原本) は読むだけで、yt-dlp には毎回コピーを渡す。yt-dlp は終了時に
+cookiefile を上書き保存するため、原本を渡すと実行のたびに内容が置き換わり、
+やがてログイン用 Cookie が抜けてメンバー限定が取れなくなるため (cookie_file_for_ytdlp)。
+
 運用: run_and_push.ps1 + タスクスケジューラでこのスクリプトを定期実行し、
 結果を GitHub へ push する。GitHub Actions 側 (meta-fetch.yml) が並行して
 新規エントリを追加するため、実行前に必ず `git pull --rebase` すること
 (run_and_push.ps1 で対応済み)。
 """
 
+import atexit
 import json
 import os
+import shutil
 import time
 import functools
 import sys
@@ -54,6 +60,78 @@ os.makedirs(COMMENTS_LOCAL, exist_ok=True)
 COOKIES_FILE = os.getenv("YT_COOKIES_FILE") or None
 COOKIES_FROM_BROWSER = os.getenv("YT_COOKIES_FROM_BROWSER") or None
 
+# yt-dlp に実際に渡す cookies のコピー (下の cookie_file_for_ytdlp() が作る)
+_COOKIE_WORK_FILE = None
+
+
+def cookie_file_for_ytdlp():
+    """yt-dlp に渡す cookies の「使い捨てコピー」のパスを返す。
+
+    yt-dlp は終了時に cookiefile を上書き保存する (YoutubeDL.save_cookies →
+    cookiejar.save())。エクスポートした原本をそのまま渡すと、実行のたびに
+    YouTube が返した Set-Cookie で中身が置き換わり、何度か回すうちにログイン用の
+    Cookie (LOGIN_INFO / __Secure-1PSID など) が欠落して未ログイン扱いになる。
+    こうなるとメンバー限定配信が一切取れなくなるため、原本は読むだけにして
+    コピーを渡し、終了時に破棄する。
+    """
+    global _COOKIE_WORK_FILE
+    if not COOKIES_FILE:
+        return None
+    if _COOKIE_WORK_FILE:
+        return _COOKIE_WORK_FILE
+    fd, tmp = tempfile.mkstemp(prefix="ytcookies_", suffix=".txt")
+    os.close(fd)
+    shutil.copyfile(COOKIES_FILE, tmp)
+    atexit.register(_remove_cookie_work_file, tmp)
+    _COOKIE_WORK_FILE = tmp
+    return tmp
+
+
+def _remove_cookie_work_file(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def youtube_cookie_names():
+    """cookies.txt の youtube.com 向け Cookie の「名前」だけを読む (値は読まない)。
+
+    ファイルが無い/読めない場合は None。
+    """
+    if not COOKIES_FILE:
+        return None
+    names = set()
+    try:
+        with open(COOKIES_FILE, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 7 and "youtube.com" in parts[0]:
+                    names.add(parts[5])
+    except OSError:
+        return None
+    return names
+
+
+def cookies_look_authenticated():
+    """メンバー限定にアクセスできる状態か (yt-dlp がログイン済みと判定するか) を先読みする。
+
+    yt-dlp は youtube.com の LOGIN_INFO と SAPISID 系の両方が揃っていないと未ログインと
+    見なし、cookie を使わないクライアント (visionos) で取得しにいく。その状態で
+    メンバー限定を取りに行くと必ず 0 件になるので、事前に判定して無駄撃ちを防ぐ。
+    判定条件は yt_dlp/extractor/youtube/_base.py の _has_auth_cookies と同じ。
+    """
+    if COOKIES_FROM_BROWSER:
+        return True  # ブラウザから直接読む場合はここでは中身を確認できない
+    names = youtube_cookie_names()
+    if not names:
+        return False
+    return "LOGIN_INFO" in names and bool(
+        names & {"SAPISID", "__Secure-1PAPISID", "__Secure-3PAPISID"}
+    )
+
 
 def get_comment_dir():
     """出力フォルダを決定。
@@ -80,8 +158,10 @@ def _ydl_opts(extra=None):
         # available" でフォーマット選択が失敗するため、それをエラーにせず続行させる。
         "ignore_no_formats_error": True,
     }
-    if COOKIES_FILE:
-        opts["cookiefile"] = COOKIES_FILE
+    # 原本ではなくコピーを渡す (yt-dlp が終了時に上書き保存するため)
+    work = cookie_file_for_ytdlp()
+    if work:
+        opts["cookiefile"] = work
     if COOKIES_FROM_BROWSER:
         name, _, profile = COOKIES_FROM_BROWSER.partition(":")
         opts["cookiesfrombrowser"] = (name.strip(), profile.strip() or None, None, None)
@@ -246,19 +326,25 @@ def cleanup_old_comments():
 
 
 # === 未処理の配信を選ぶ ===
-def select_pending_streams(archives, cap_per_channel):
+def select_pending_streams(archives, cap_per_channel, skip_members=False):
     """type=='stream' かつ number_of_comments 未設定のエントリを、
     チャンネルごとに新しい順で最大 cap_per_channel 件ずつ選ぶ。
 
     「number_of_comments が存在する」を処理済みの目印にしている
     (0件でもチャット無し/アクセス不可として処理済みにする。毎回リトライして
     枠を専有するのを防ぐ)。channel は youtube_meta_fetcher.py が付与する。
+
+    skip_members=True のときはメンバー限定を対象から外す。ログイン Cookie が
+    無い状態で取りに行くと必ず 0 件になり、しかも上記の目印が付いて
+    「処理済み」として二度と再取得されなくなってしまうため。
     """
     by_channel = {}
     for a in archives:
         if a.get("type") != "stream":
             continue
         if "number_of_comments" in a:
+            continue
+        if skip_members and a.get("members_only"):
             continue
         by_channel.setdefault(a.get("channel"), []).append(a)
 
@@ -273,8 +359,20 @@ def select_pending_streams(archives, cap_per_channel):
 def main():
     try:
         print("YouTube チャット取得を開始 (ローカル)...")
+
+        if COOKIES_FILE and not os.path.exists(COOKIES_FILE):
+            print(f"⚠ cookies ファイルが見つかりません: {COOKIES_FILE}")
+        authed = cookies_look_authenticated()
+        if not authed:
+            print(
+                "⚠ ログイン用 Cookie (LOGIN_INFO) が見当たりません。メンバー限定配信は"
+                "今回スキップします (ブラウザから cookies.txt を再エクスポートしてください)。"
+            )
+
         local_archives = load_local_archives()
-        pending = select_pending_streams(local_archives, MAX_NEW_STREAMS_PER_CHANNEL)
+        pending = select_pending_streams(
+            local_archives, MAX_NEW_STREAMS_PER_CHANNEL, skip_members=not authed
+        )
         print(f"未処理の配信: {len(pending)} 件")
 
         for entry in pending:

@@ -137,6 +137,26 @@ python youtube_archiver_with_comments_github.py
 - リポジトリ直下に `cookies.txt`（メンバー資格アカウントのもの）を置くと、
   メンバー限定アーカイブも取得対象になる。`.gitignore` 済みでコミットされない。
 
+#### cookies.txt の扱い（重要）
+
+**yt-dlp は終了時に `cookiefile` を上書き保存する**（`YoutubeDL.save_cookies`）。原本を直接
+渡すと実行のたびに YouTube 側の Set-Cookie で中身が置き換わり、何度か回すうちに
+`LOGIN_INFO` や `__Secure-1PSID` といったログイン用 Cookie が欠落して**未ログイン扱い**になる。
+そうなると yt-dlp は cookie を使わないクライアント（`visionos`）で取得しにいくため、
+メンバー限定が一切取れなくなる（2026-09 に実際に発生）。
+
+そのため `cookie_file_for_ytdlp()` が毎回 **使い捨てのコピー**を作って yt-dlp に渡し、
+`cookies.txt` の原本には触れない。
+
+起動時に `cookies_look_authenticated()` で `LOGIN_INFO` ＋ SAPISID 系の有無を確認し
+（yt-dlp の `_has_auth_cookies` と同条件）、揃っていなければ警告を出して
+**メンバー限定エントリを対象から外す**。取りに行っても必ず 0 件になるうえ、
+`number_of_comments: 0` が「処理済み」の目印として残り、cookie を直しても
+二度と再取得されなくなってしまうため。
+
+取れなくなったら、ブラウザ（ログイン済み）から cookies.txt を再エクスポートして
+差し替える。`LOGIN_INFO` が含まれているかを確認すること。
+
 Windows タスクスケジューラ登録例（1時間ごと）:
 - プログラム: `powershell.exe`
 - 引数: `-ExecutionPolicy Bypass -NoProfile -File "D:\81801\Documents\YT-extension\youtube-comment-fetcher\run_and_push.ps1"`

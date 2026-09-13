@@ -40,9 +40,19 @@ if (Test-Path $cookie) {
 python -m pip install --quiet --upgrade yt-dlp
 Log "yt-dlp 更新確認 (exit=$LASTEXITCODE)"
 
-# 収集本体を実行
-python youtube_archiver_with_comments_github.py
+# 収集本体を実行。スクリプトの出力 (取得件数・cookie の警告など) は stderr に出るので
+# ログにも残す。「メンバー限定が取れていない」といった異常に後から気づけるようにするため
+# (以前、ログには exit=0 しか残らず5日間気づけなかった)。
+# リダイレクトを cmd 側に任せているのは、PowerShell 5.1 で native コマンドの stderr を
+# 直接リダイレクトすると、1行目が NativeCommandError として整形されてログが汚れるため。
+$env:PYTHONIOENCODING = "utf-8"
+$scriptOut = Join-Path $env:TEMP "yt_archiver_out.txt"
+cmd /c "python youtube_archiver_with_comments_github.py 2> `"$scriptOut`""
 Log "収集スクリプト終了 (exit=$LASTEXITCODE)"
+if (Test-Path $scriptOut) {
+    Get-Content $scriptOut -Encoding UTF8 | Where-Object { $_ -ne "" } | ForEach-Object { Log "  $_" }
+    Remove-Item $scriptOut -Force
+}
 
 # 変更を commit & push (cookies.txt / comments_local / ログは .gitignore 済みで対象外)
 # チャット取得中(数分〜数十分)に Actions が並行して push している可能性があるため、
