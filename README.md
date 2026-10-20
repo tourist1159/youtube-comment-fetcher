@@ -47,6 +47,9 @@ YouTube 対応版。
   要求しているので**追加コストはゼロ**（part を増やしてもコストは変わらない）。タグが1つも
   付いていない動画では `snippet.tags` 自体が返らないので、その場合はキーを作らない。
   下の12時間更新で取り直し、返ってきた動画にタグが無ければ「作者が消した」とみなしてキーを消す。
+- **概要欄 `description`**: `snippet.description` をそのまま入れる。`snippet` は元から
+  要求しているので tags と同様に**追加コストはゼロ**。空文字列の場合はキーを作らない
+  （長文になりうるので `youtube_archives.json` のサイズは増えるが、現状トリミングはしていない）。
 - **再生数 `view_count` / 高評価数 `like_count`**: `videos.list` の part に `statistics` を
   足して取得する。パーツを増やしてもコストは変わらない（videos.list は1回の呼び出しにつき
   1ユニット、50件まで）。新規動画は収集時に入るが、既存動画の数字は古くなるので
@@ -55,10 +58,10 @@ YouTube 対応版。
   しまうため（mokou-timeline 側で同じことをして account 全体の cron を間引かれた前例がある）。
   最後に更新した時刻は `meta_state.json` に持つ（`youtube_archives.json` は配列で、
   サイト側がそのまま読むため付帯情報を混ぜられない）。42件なら1回1ユニット＝1日2ユニット。
-  この12時間更新は**タグ（`tags`）も一緒に取り直す**（`refresh_video_details`）。
-  なおメンバー限定動画・高評価数を非公開にしている動画は `statistics` の該当フィールドが
-  返らない＝ `None` になるが、そこでタグまで諦めないよう、再生数・高評価数・タグは
-  それぞれ独立して処理している。
+  この12時間更新は**タグ（`tags`）・概要欄（`description`）も一緒に取り直す**
+  （`refresh_video_details`）。なおメンバー限定動画・高評価数を非公開にしている動画は
+  `statistics` の該当フィールドが返らない＝ `None` になるが、そこでタグ・概要欄まで諦めないよう、
+  再生数・高評価数・タグ・概要欄はそれぞれ独立して処理している。
 - `.github/workflows/meta-fetch.yml` で毎時実行。Secret `YOUTUBE_API_KEY` が必要
   （Google Cloud Console で YouTube Data API v3 を有効化し取得。無料枠1日10,000unitに対し
   消費は数十〜百unit程度で余裕）。
@@ -90,7 +93,8 @@ YouTube 対応版。
   // 通常動画 (①のみ。コメントなし)
   { "video_id":"WoC3TpJORaY", "title":"...", "start_time":"2026-08-04T...",
     "url":"...", "duration":451, "video_length":"00:07:31", "type":"video",
-    "channel":"mokouliszt", "view_count":98765, "like_count":3210 }
+    "channel":"mokouliszt", "view_count":98765, "like_count":3210,
+    "description":"概要欄の全文..." }
   // メンバー限定配信 (再生数・高評価数は YouTube が公開していないため両方とも付かない)
   { "video_id":"...", "type":"stream", "channel":"mokouliszt", "members_only":true, ... }
   // 配信だが②未実行 (number_of_comments が無い = チャット取得待ち)
@@ -99,11 +103,13 @@ YouTube 対応版。
   拡張/サイトは `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
   `view_count`/`like_count` は12時間ごとに更新される数値で、視聴回数/高評価数を非公開に
   している動画では付かない。`tags` はサイトのタグ検索が使う（タグが1つも無い動画にはキー
-  自体が付かない）。
-- `meta_state.json` … 再生数・高評価数・タグを最後に一括更新した時刻だけを持つ小さなファイル
-  （`{"view_counts_updated_at":"...", "tags_backfilled_at":"...", "likes_backfilled_at":"..."}`）。
-  サイトは読まない。`tags_backfilled_at`/`likes_backfilled_at` はそれぞれの項目を追加した
-  直後の初回取り込み用で、このキーが無いときだけ12時間ゲートを待たずに1回走る
+  自体が付かない）。`description` は概要欄全文（空ならキー自体が付かない）で、
+  mokou-timeline では動画（`type:"video"`）カードの詳細ポップアップに表示する。
+- `meta_state.json` … 再生数・高評価数・タグ・概要欄を最後に一括更新した時刻だけを持つ
+  小さなファイル（`{"view_counts_updated_at":"...", "tags_backfilled_at":"...",
+  "likes_backfilled_at":"...", "description_backfilled_at":"..."}`）。サイトは読まない。
+  `tags_backfilled_at`/`likes_backfilled_at`/`description_backfilled_at` はそれぞれの項目を
+  追加した直後の初回取り込み用で、このキーが無いときだけ12時間ゲートを待たずに1回走る
   （「対象の値が無いエントリがあれば実行」にすると、1本でもそのエントリがあると毎時
   コミットが走り続けてしまうため、この形にしている）。
 - `comments_github/<videoId>_comments.json` … 配信1本ごとのコメント（通常動画には作られない）

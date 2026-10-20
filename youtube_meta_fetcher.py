@@ -221,6 +221,16 @@ def extract_tags(v):
     return cleaned or None
 
 
+def extract_description(v):
+    """videos.list の1件から概要欄を取り出す。空なら None。
+
+    snippet は元から要求しているので tags と同様に追加コストは無い。
+    """
+    desc = (v.get("snippet") or {}).get("description")
+    desc = (desc or "").strip()
+    return desc or None
+
+
 # === ユーティリティ ===
 _DURATION_RE = re.compile(
     r"P(?:(?P<days>\d+)D)?T(?:(?P<hours>\d+)H)?(?:(?P<minutes>\d+)M)?(?:(?P<seconds>\d+)S)?"
@@ -299,6 +309,9 @@ def classify_entry(v, ch, user_start_dt):
     tags = extract_tags(v)
     if tags is not None:
         entry["tags"] = tags
+    description = extract_description(v)
+    if description is not None:
+        entry["description"] = description
     return entry
 
 
@@ -370,11 +383,12 @@ def view_counts_are_due(state):
 
 
 def refresh_video_details(archives):
-    """既知エントリ全件の再生数・高評価数・タグを videos.list で取り直す。更新した件数を返す。
+    """既知エントリ全件の再生数・高評価数・タグ・概要欄を videos.list で取り直す。
+    更新した件数を返す。
 
     50件で1呼び出し=1ユニットなので、数十〜数百件でも1日あたり数ユニットで収まる
-    (1日の割り当ては10,000ユニット)。タグは snippet に含まれており、snippet は元から
-    要求しているので、ここに相乗りするぶんの追加コストは無い。
+    (1日の割り当ては10,000ユニット)。タグ・概要欄は snippet に含まれており、snippet は
+    元から要求しているので、ここに相乗りするぶんの追加コストは無い。
     """
     ids = [a["video_id"] for a in archives if a.get("video_id")]
     if not ids:
@@ -383,6 +397,7 @@ def refresh_video_details(archives):
     changed_views = 0
     changed_likes = 0
     changed_tags = 0
+    changed_desc = 0
     for batch in chunks(ids, 50):
         try:
             for v in fetch_video_details(batch):
@@ -390,9 +405,9 @@ def refresh_video_details(archives):
                 if entry is None:
                     continue
 
-                # 再生数・高評価数・タグは独立に処理する。メンバー限定動画は statistics
-                # 自体が返らない(=再生数/高評価数が None)ので、ここで一緒に弾くと
-                # タグまで永久に付かなくなってしまう。
+                # 再生数・高評価数・タグ・概要欄は独立に処理する。メンバー限定動画は
+                # statistics 自体が返らない(=再生数/高評価数が None)ので、ここで
+                # 一緒に弾くとタグ・概要欄まで永久に付かなくなってしまう。
                 views = extract_view_count(v)
                 if views is not None and entry.get("view_count") != views:
                     entry["view_count"] = views
@@ -411,13 +426,22 @@ def refresh_video_details(archives):
                 elif entry.get("tags") != tags:
                     entry["tags"] = tags
                     changed_tags += 1
+
+                description = extract_description(v)
+                if description is None:
+                    if entry.pop("description", None) is not None:
+                        changed_desc += 1
+                elif entry.get("description") != description:
+                    entry["description"] = description
+                    changed_desc += 1
         except Exception as e:
             # 一部のバッチが失敗しても、取れたぶんはそのまま活かす
             print(f"  詳細の取得に失敗 ({len(batch)}件): {e}")
     api_calls = (len(ids) + 49) // 50
     print(f"👁 再生数を更新: {changed_views}件 / 👍 高評価数を更新: {changed_likes}件 / "
-          f"🏷 タグを更新: {changed_tags}件 ({len(ids)}件中、API {api_calls} 回)")
-    return changed_views + changed_likes + changed_tags
+          f"🏷 タグを更新: {changed_tags}件 / 📝 概要欄を更新: {changed_desc}件 "
+          f"({len(ids)}件中、API {api_calls} 回)")
+    return changed_views + changed_likes + changed_tags + changed_desc
 
 
 # === メイン ===
@@ -473,7 +497,7 @@ def main():
         except Exception as e:
             print(f"[{ch['handle']}] 収集エラー: {e}")
 
-    # 既に載っている動画の再生数・高評価数・タグを半日に1回だけ取り直す
+    # 既に載っている動画の再生数・高評価数・タグ・概要欄を半日に1回だけ取り直す
     state = load_state()
     due, reason = view_counts_are_due(state)
     if not due and not state.get("tags_backfilled_at"):
@@ -485,16 +509,20 @@ def main():
     if not due and not state.get("likes_backfilled_at"):
         # 高評価数収集を入れた直後の1回だけ、同じ理由で12時間ゲートを待たずに取り込む。
         due, reason = True, "高評価数の初回取り込み"
+    if not due and not state.get("description_backfilled_at"):
+        # 概要欄収集を入れた直後の1回だけ、同じ理由で12時間ゲートを待たずに取り込む。
+        due, reason = True, "概要欄の初回取り込み"
     if due:
-        print(f"--- 再生数・高評価数・タグの更新 ({reason}) ---")
+        print(f"--- 再生数・高評価数・タグ・概要欄の更新 ({reason}) ---")
         refresh_video_details(local_archives)
         now_iso = datetime.now(timezone.utc).isoformat()
         state["view_counts_updated_at"] = now_iso
         state["tags_backfilled_at"] = now_iso
         state["likes_backfilled_at"] = now_iso
+        state["description_backfilled_at"] = now_iso
         save_state(state)
     else:
-        print(f"⏭ 再生数・高評価数・タグの更新はスキップ ({reason})")
+        print(f"⏭ 再生数・高評価数・タグ・概要欄の更新はスキップ ({reason})")
 
     update_archive_data(local_archives)
 
