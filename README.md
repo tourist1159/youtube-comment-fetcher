@@ -62,6 +62,15 @@ YouTube 対応版。
   （`refresh_video_details`）。なおメンバー限定動画・高評価数を非公開にしている動画は
   `statistics` の該当フィールドが返らない＝ `None` になるが、そこでタグ・概要欄まで諦めないよう、
   再生数・高評価数・タグ・概要欄はそれぞれ独立して処理している。
+- **視聴可否 `available`**: この12時間更新で、リクエストした動画IDが `videos.list` の
+  レスポンスに1件も含まれていなければ非公開化・削除されたとみなし `available:false` を
+  付ける。公開APIキー（所有者としてのOAuth認証ではない）では、非公開化された動画と削除
+  された動画をAPIのレスポンスだけから区別する方法が無く、**どちらも videos.list の結果から
+  黙って消えるだけなので区別せず同じ扱いにしている**。バッチ全体のリクエストが例外で
+  失敗した場合は何も判定しない（一時的なAPI障害を「全部消えた」と誤判定しないため）。
+  再び返ってくるようになれば（非公開を解除する等）`available` キー自体を外して
+  視聴可能に戻す（Kick側の規約と同じく、キー未設定＝視聴可能）。mokou-timeline は
+  `available:false` のエントリをタイムラインに一切表示しない。
 - `.github/workflows/meta-fetch.yml` で毎時実行。Secret `YOUTUBE_API_KEY` が必要
   （Google Cloud Console で YouTube Data API v3 を有効化し取得。無料枠1日10,000unitに対し
   消費は数十〜百unit程度で余裕）。
@@ -99,16 +108,22 @@ YouTube 対応版。
   { "video_id":"...", "type":"stream", "channel":"mokouliszt", "members_only":true, ... }
   // 配信だが②未実行 (number_of_comments が無い = チャット取得待ち)
   { "video_id":"...", "type":"stream", "channel":"mokoustream", ... }
+  // 非公開化・削除された動画 (videos.list のレスポンスから消えたことで検知)
+  { "video_id":"...", "type":"video", "channel":"mokoustream", "available":false, ... }
   ```
   拡張/サイトは `type:"stream"` のみグラフ対象にする（`type:"video"` は無視）。
   `view_count`/`like_count` は12時間ごとに更新される数値で、視聴回数/高評価数を非公開に
   している動画では付かない。`tags` はサイトのタグ検索が使う（タグが1つも無い動画にはキー
   自体が付かない）。`description` は概要欄全文（空ならキー自体が付かない）で、
   mokou-timeline では動画（`type:"video"`）カードの詳細ポップアップに表示する。
-- `meta_state.json` … 再生数・高評価数・タグ・概要欄を最後に一括更新した時刻だけを持つ
-  小さなファイル（`{"view_counts_updated_at":"...", "tags_backfilled_at":"...",
-  "likes_backfilled_at":"...", "description_backfilled_at":"..."}`）。サイトは読まない。
-  `tags_backfilled_at`/`likes_backfilled_at`/`description_backfilled_at` はそれぞれの項目を
+  `available:false` は非公開化・削除された動画を示し、キー未設定＝視聴可能
+  （mokou-timeline はこれを持つエントリをタイムラインに表示しない）。
+- `meta_state.json` … 再生数・高評価数・タグ・概要欄・視聴可否を最後に一括更新した時刻だけを
+  持つ小さなファイル（`{"view_counts_updated_at":"...", "tags_backfilled_at":"...",
+  "likes_backfilled_at":"...", "description_backfilled_at":"...",
+  "availability_backfilled_at":"..."}`）。サイトは読まない。
+  `tags_backfilled_at`/`likes_backfilled_at`/`description_backfilled_at`/
+  `availability_backfilled_at` はそれぞれの項目を
   追加した直後の初回取り込み用で、このキーが無いときだけ12時間ゲートを待たずに1回走る
   （「対象の値が無いエントリがあれば実行」にすると、1本でもそのエントリがあると毎時
   コミットが走り続けてしまうため、この形にしている）。

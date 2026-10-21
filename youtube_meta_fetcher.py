@@ -383,12 +383,20 @@ def view_counts_are_due(state):
 
 
 def refresh_video_details(archives):
-    """既知エントリ全件の再生数・高評価数・タグ・概要欄を videos.list で取り直す。
-    更新した件数を返す。
+    """既知エントリ全件の再生数・高評価数・タグ・概要欄・視聴可否を videos.list で
+    取り直す。更新した件数を返す。
 
     50件で1呼び出し=1ユニットなので、数十〜数百件でも1日あたり数ユニットで収まる
     (1日の割り当ては10,000ユニット)。タグ・概要欄は snippet に含まれており、snippet は
     元から要求しているので、ここに相乗りするぶんの追加コストは無い。
+
+    視聴可否: リクエストした動画IDがレスポンスの items に1件も含まれていなければ、
+    その動画は非公開化されたか削除されたとみなし available:false を付ける
+    (公開APIキーでは、動画を所有者としてOAuth認証しない限り非公開と削除を区別できず、
+    どちらも videos.list の結果から黙って消えるだけなので、区別せず同じ扱いにする)。
+    逆に返ってきていれば視聴可能に戻す(既存の規約どおり available キー自体を外す)。
+    バッチ全体のリクエストが例外で失敗した場合は何も判定しない(一時的なAPI障害を
+    「全部削除された」と誤判定しないため)。
     """
     ids = [a["video_id"] for a in archives if a.get("video_id")]
     if not ids:
@@ -398,12 +406,21 @@ def refresh_video_details(archives):
     changed_likes = 0
     changed_tags = 0
     changed_desc = 0
+    changed_availability = 0
     for batch in chunks(ids, 50):
         try:
+            received_ids = set()
             for v in fetch_video_details(batch):
-                entry = by_id.get(v.get("id"))
+                vid = v.get("id")
+                received_ids.add(vid)
+                entry = by_id.get(vid)
                 if entry is None:
                     continue
+
+                # 動画が返ってきた = 現在も視聴可能。以前 available:false を付けていた
+                # 場合は取り消す(フラグ未設定=視聴可能という既存の規約に合わせる)。
+                if entry.pop("available", None) is False:
+                    changed_availability += 1
 
                 # 再生数・高評価数・タグ・概要欄は独立に処理する。メンバー限定動画は
                 # statistics 自体が返らない(=再生数/高評価数が None)ので、ここで
@@ -434,14 +451,23 @@ def refresh_video_details(archives):
                 elif entry.get("description") != description:
                     entry["description"] = description
                     changed_desc += 1
+
+            # リクエストしたのに返ってこなかった動画 = 非公開化・削除されたとみなす
+            for vid in batch:
+                if vid in received_ids:
+                    continue
+                entry = by_id.get(vid)
+                if entry is not None and entry.get("available") is not False:
+                    entry["available"] = False
+                    changed_availability += 1
         except Exception as e:
             # 一部のバッチが失敗しても、取れたぶんはそのまま活かす
             print(f"  詳細の取得に失敗 ({len(batch)}件): {e}")
     api_calls = (len(ids) + 49) // 50
     print(f"👁 再生数を更新: {changed_views}件 / 👍 高評価数を更新: {changed_likes}件 / "
-          f"🏷 タグを更新: {changed_tags}件 / 📝 概要欄を更新: {changed_desc}件 "
-          f"({len(ids)}件中、API {api_calls} 回)")
-    return changed_views + changed_likes + changed_tags + changed_desc
+          f"🏷 タグを更新: {changed_tags}件 / 📝 概要欄を更新: {changed_desc}件 / "
+          f"🚫 視聴可否を更新: {changed_availability}件 ({len(ids)}件中、API {api_calls} 回)")
+    return changed_views + changed_likes + changed_tags + changed_desc + changed_availability
 
 
 # === メイン ===
@@ -512,17 +538,21 @@ def main():
     if not due and not state.get("description_backfilled_at"):
         # 概要欄収集を入れた直後の1回だけ、同じ理由で12時間ゲートを待たずに取り込む。
         due, reason = True, "概要欄の初回取り込み"
+    if not due and not state.get("availability_backfilled_at"):
+        # 視聴可否チェックを入れた直後の1回だけ、同じ理由で12時間ゲートを待たずに確認する。
+        due, reason = True, "視聴可否の初回チェック"
     if due:
-        print(f"--- 再生数・高評価数・タグ・概要欄の更新 ({reason}) ---")
+        print(f"--- 再生数・高評価数・タグ・概要欄・視聴可否の更新 ({reason}) ---")
         refresh_video_details(local_archives)
         now_iso = datetime.now(timezone.utc).isoformat()
         state["view_counts_updated_at"] = now_iso
         state["tags_backfilled_at"] = now_iso
         state["likes_backfilled_at"] = now_iso
         state["description_backfilled_at"] = now_iso
+        state["availability_backfilled_at"] = now_iso
         save_state(state)
     else:
-        print(f"⏭ 再生数・高評価数・タグ・概要欄の更新はスキップ ({reason})")
+        print(f"⏭ 再生数・高評価数・タグ・概要欄・視聴可否の更新はスキップ ({reason})")
 
     update_archive_data(local_archives)
 
