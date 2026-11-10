@@ -72,3 +72,4 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 Log "=== 完了 ==="
+$name = Read-Host "Press any key to finish."
