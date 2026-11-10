@@ -83,7 +83,12 @@ YouTube 対応版。
 
 - `replayChatItemAction` をパースして `{id, offset, text}` に整形
 - メンバー限定も対象（メンバー資格のある cookie を渡した場合のみ実取得。無ければ自動スキップ）
-- 取得後は成功/失敗（0件）に関わらず `number_of_comments` をセットし、再取得を防ぐ
+- 取得できた場合、またはチャットリプレイが存在しないと確定した場合は `number_of_comments` を
+  セットし、再取得を防ぐ
+- yt-dlp のエラー（bot 判定・cookie 切れ・ネットワーク等）や配信直後のアーカイブ処理中
+  （`live_status: post_live`）など**一時的な失敗では `number_of_comments` を付けず**、
+  `chat_fetch_failures` に失敗回数を記録して次回リトライする。`MAX_FETCH_FAILURES`（既定24）回
+  失敗したら諦めて 0 件で処理済みにする。yt-dlp の WARNING/ERROR はログ（`run_local_log.txt`）に残る
 - チャンネルごとに新しい順で最大 `MAX_NEW_STREAMS_PER_CHANNEL`（既定3）件/回に制限
   （取得負荷が重いため。枯渇防止でチャンネル単位）
 
