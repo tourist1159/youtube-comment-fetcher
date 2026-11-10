@@ -45,6 +45,10 @@ print = functools.partial(print, file=sys.stderr, flush=True)
 MAX_NEW_STREAMS_PER_CHANNEL = 3
 # コメント1件あたりのテキスト最大長 (肥大化防止)
 MAX_TEXT_LEN = 200
+# 取得「失敗」(yt-dlp のエラー / 配信直後でアーカイブ処理中 等) のときは
+# number_of_comments を付けずに次回以降リトライする。この回数失敗したら諦めて 0 にする
+# (タスクスケジューラで毎時実行なら約1日)。失敗回数はエントリの chat_fetch_failures に持つ。
+MAX_FETCH_FAILURES = 24
 
 # === 保存先 ===
 COMMENTS_GITHUB = "comments_github"
@@ -184,31 +188,82 @@ def _runs_to_text(runs):
     return "".join(parts)
 
 
+class _YdlLogger:
+    """yt-dlp の warning/error を拾って表示・保持する。
+
+    以前は quiet + no_warnings + ignoreerrors で yt-dlp のエラーが完全に握り潰され、
+    bot 判定や cookie 切れで取得に失敗しても「チャットリプレイ無し」としか出ず、
+    原因が分からないまま number_of_comments: 0 (=処理済み) にされていた。
+    """
+
+    def __init__(self, video_id):
+        self.video_id = video_id
+        self.errors = []
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        print(f"[{self.video_id}] yt-dlp WARNING: {msg}")
+
+    def error(self, msg):
+        self.errors.append(msg)
+        print(f"[{self.video_id}] yt-dlp {msg}")
+
+
+# get_chat_comments の結果ステータス
+CHAT_OK = "ok"            # 取得成功 (1件以上)
+CHAT_NONE = "none"        # チャットリプレイが存在しない (確定。0件で処理済みにしてよい)
+CHAT_RETRY = "retry"      # 一時的な失敗・まだ取れない (処理済みにせず次回リトライ)
+
+
 def get_chat_comments(video_id):
-    """指定動画のチャットリプレイを取得し、[{id, offset, text}, ...] を返す。
+    """指定動画のチャットリプレイを取得し、(status, [{id, offset, text}, ...]) を返す。
 
     yt-dlp で live_chat 字幕 (<id>.live_chat.json) を一時DLし、
     replayChatItemAction を1行ずつパースする。
     """
     url = f"https://www.youtube.com/watch?v={video_id}"
     comments = []
+    logger = _YdlLogger(video_id)
     with tempfile.TemporaryDirectory() as tmp:
         opts = _ydl_opts({
             "writesubtitles": True,
             "subtitleslangs": ["live_chat"],
             "outtmpl": os.path.join(tmp, "%(id)s.%(ext)s"),
+            "logger": logger,
+            "no_warnings": False,  # 失敗原因 (bot 判定・cookie 切れ等) をログに残す
         })
         try:
             with YoutubeDL(opts) as ydl:
-                ydl.download([url])
+                info = ydl.extract_info(url, download=True)
         except Exception as e:
             print(f"[{video_id}] チャット取得エラー: {e}")
-            return comments
+            return CHAT_RETRY, comments
 
+        if not info:
+            # ignoreerrors=True だと抽出失敗 (bot 判定・cookie 切れ・ネットワーク等) は
+            # 例外にならず None が返る。チャットが無いのとは区別してリトライする。
+            print(f"[{video_id}] 動画情報を取得できませんでした (リトライ対象)")
+            return CHAT_RETRY, comments
+
+        live_status = info.get("live_status")
+        has_chat = "live_chat" in (info.get("subtitles") or {})
         path = os.path.join(tmp, f"{video_id}.live_chat.json")
+
         if not os.path.exists(path):
-            print(f"[{video_id}] チャットリプレイ無し")
-            return comments
+            if live_status in ("is_live", "is_upcoming", "post_live"):
+                # 配信中・配信直後 (アーカイブ処理中) はチャットリプレイがまだ取れない
+                print(f"[{video_id}] まだチャットリプレイを取得できない状態 (live_status={live_status})")
+                return CHAT_RETRY, comments
+            if has_chat or logger.errors:
+                print(f"[{video_id}] チャットリプレイのダウンロードに失敗 (リトライ対象)")
+                return CHAT_RETRY, comments
+            print(f"[{video_id}] チャットリプレイ無し (live_status={live_status})")
+            return CHAT_NONE, comments
 
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -243,7 +298,13 @@ def get_chat_comments(video_id):
                         "offset": round(offset, 1),
                         "text": text,
                     })
-    return comments
+
+    if not comments:
+        # ファイルはあるのにコメントが1件も無い = 途中で切れた/形式変更の可能性。
+        # 本当に0件の配信は稀なので、まずはリトライする。
+        print(f"[{video_id}] live_chat ファイルは取得できたがコメント0件 (リトライ対象)")
+        return CHAT_RETRY, comments
+    return CHAT_OK, comments
 
 
 # === ローカル保存管理 ===
@@ -331,8 +392,10 @@ def select_pending_streams(archives, cap_per_channel, skip_members=False):
     チャンネルごとに新しい順で最大 cap_per_channel 件ずつ選ぶ。
 
     「number_of_comments が存在する」を処理済みの目印にしている
-    (0件でもチャット無し/アクセス不可として処理済みにする。毎回リトライして
-    枠を専有するのを防ぐ)。channel は youtube_meta_fetcher.py が付与する。
+    (チャットリプレイが存在しないと確定した場合は 0 件で処理済みにする)。
+    yt-dlp のエラー・アーカイブ処理中などの一時的な失敗では付けずにリトライし、
+    MAX_FETCH_FAILURES 回失敗したら 0 件で処理済みにする (毎回リトライして
+    枠を専有し続けるのを防ぐ)。channel は youtube_meta_fetcher.py が付与する。
 
     skip_members=True のときはメンバー限定を対象から外す。ログイン Cookie が
     無い状態で取りに行くと必ず 0 件になり、しかも上記の目印が付いて
@@ -378,7 +441,18 @@ def main():
         for entry in pending:
             video_id = entry["video_id"]
             print(f"  取得中: {entry.get('title', '')[:40]} ({video_id})")
-            comments = get_chat_comments(video_id)
+            status, comments = get_chat_comments(video_id)
+            if status == CHAT_RETRY:
+                failures = entry.get("chat_fetch_failures", 0) + 1
+                if failures < MAX_FETCH_FAILURES:
+                    # number_of_comments を付けない = 次回また対象になる
+                    entry["chat_fetch_failures"] = failures
+                    print(f"    → 取得失敗 {failures}/{MAX_FETCH_FAILURES} 回目。次回リトライします")
+                    update_archive_data(local_archives)
+                    time.sleep(2)
+                    continue
+                print(f"    → {MAX_FETCH_FAILURES} 回失敗したので諦めます (0件で処理済み)")
+            entry.pop("chat_fetch_failures", None)
             entry["number_of_comments"] = len(comments)
             save_comment_stats(entry, comments)
             update_archive_data(local_archives)  # 各件ごとに索引保存 (途中終了に強く)
